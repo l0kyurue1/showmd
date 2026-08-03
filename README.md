@@ -4,7 +4,7 @@
 Read and edit markdown in your browser.
 
 ```sh
-npx showmd
+npx showmd-cli
 ```
 
 showmd serves a folder of markdown files to your browser: a rendered reading view with folder navigation, an inline editor that renders code, math, and diagrams as you type, a version history of every save, and a browser for the skills, instructions, and memory files your AI agents run on. It runs on localhost with a single runtime dependency, and nothing you write leaves your machine.
@@ -23,7 +23,7 @@ showmd serves a folder of markdown files to your browser: a rendered reading vie
 
 **Everything you expect from a markdown editor.** A slash menu for switching block types, a floating toolbar for formatting, folder navigation in the sidebar, light and dark themes, and a page that reloads whenever a file changes on disk.
 
-**Zero setup.** Node 20 or newer and one runtime dependency. `npx showmd` needs no install and there is nothing to configure.
+**Zero setup.** Node 20 or newer and one runtime dependency. `npx showmd-cli` needs no install and there is nothing to configure.
 
 **Local only.** The server binds to 127.0.0.1. Your files never leave your machine, and everything works offline.
 
@@ -31,15 +31,16 @@ showmd serves a folder of markdown files to your browser: a rendered reading vie
 
 | Command | What you get |
 |---|---|
-| `npx showmd` | No install. Always the latest version, slower first run. Any OS with Node 20 or newer. |
-| `npm i -g showmd` | A `showmd` command on your `PATH`. Any OS with Node 20 or newer. Update with `npm update -g showmd`. |
+| `npx showmd-cli` | No install. Always the latest version, slower first run. Any OS with Node 20 or newer. |
+| `npm i -g showmd-cli` | A `showmd` command on your `PATH`. Any OS with Node 20 or newer. Update with `npm update -g showmd-cli`. |
 | `brew install l0kyurue1/tap/showmd` | The same command, managed by Homebrew (macOS and Linux). Update with `brew upgrade`. |
 
-After a global install, drop the `npx`: every command below also works as `showmd …`.
+The command is `showmd` once installed. Commands below are written that way; with
+npx, prefix them as `npx showmd-cli …`.
 
 ### Desktop app
 
-Needs a global install first (`npm i -g showmd` or Homebrew): the npx cache is
+Needs a global install first (`npm i -g showmd-cli` or Homebrew): the npx cache is
 cleared periodically and an app made from it breaks.
 
 ```sh
@@ -89,22 +90,22 @@ Windows. Both need `showmd` on your `PATH`.
 ### Serve markdown
 
 ```sh
-npx showmd                # serve the current directory
-npx showmd notes/         # serve a folder
-npx showmd README.md      # open a single file
-npx showmd --port 8080    # pick a port (default 4321; falls back to a free port if taken)
-npx showmd --no-open      # don't launch the browser
-npx showmd --help         # every command and flag (-h)
-npx showmd --version      # print the version (-v)
+showmd                # serve the current directory
+showmd notes/         # serve a folder
+showmd README.md      # open a single file
+showmd --port 8080    # pick a port (default 4321; falls back to a free port if taken)
+showmd --no-open      # don't launch the browser
+showmd --help         # every command and flag (-h)
+showmd --version      # print the version (-v)
 ```
 
 ### Browse agent skills
 
 ```sh
-npx showmd skills         # auto: project mode if cwd is a skills project, else all mode
-npx showmd skills all     # every discovered project's skills, plus your global skills
-npx showmd skills global  # just your global skills (~/.claude/skills, ~/.codex/skills, ...)
-npx showmd skills <dir>   # project mode for the given dir(s)
+showmd skills         # auto: project mode if cwd is a skills project, else all mode
+showmd skills all     # every discovered project's skills, plus your global skills
+showmd skills global  # just your global skills (~/.claude/skills, ~/.codex/skills, ...)
+showmd skills <dir>   # project mode for the given dir(s)
 ```
 
 `showmd skills` groups your Claude Code, Codex, and other agent skill directories (`~/.claude/skills`, project `.claude/skills`, `~/.claude/plugins/*/skills`, `~/.codex/skills`, `~/.agents/skills`) into one sidebar. `all` mode discovers other projects via Claude Code's `~/.claude.json` history plus a sibling-directory scan.
@@ -114,7 +115,7 @@ Detection reaches beyond those paths: 70+ agents (Cursor, Zed, Windsurf, Gemini 
 ### Agent config & memory
 
 ```sh
-npx showmd agents         # browse Claude Code / Codex instructions, rules, and memories
+showmd agents         # browse Claude Code / Codex instructions, rules, and memories
 ```
 
 This shows global instructions like `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, their rules, and per-project memories. The app reaches the same view from the sidebar or a keyboard shortcut.
@@ -122,8 +123,8 @@ This shows global instructions like `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.m
 ### Housekeeping
 
 ```sh
-npx showmd prune <dir>    # delete saved history for a folder
-npx showmd prune --all    # delete all saved history
+showmd prune <dir>    # delete saved history for a folder
+showmd prune --all    # delete all saved history
 ```
 
 ## What showmd is not

@@ -1,6 +1,6 @@
 'use strict';
 
-const REGISTRY_URL = 'https://registry.npmjs.org/showmd/latest';
+const REGISTRY_URL = 'https://registry.npmjs.org/showmd-cli/latest';
 const UPDATE_CACHE_MS = 24 * 60 * 60 * 1000;
 const UPDATE_TIMEOUT_MS = 3000;
 

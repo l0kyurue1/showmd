@@ -1,5 +1,5 @@
 {
-  "name": "showmd",
+  "name": "showmd-cli",
   "version": "0.1.0",
   "description": "Read and edit markdown in your browser.",
   "license": "MIT",

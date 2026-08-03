@@ -9,7 +9,7 @@ test('updateInfo: nothing checked yet is not the same as a failed check', () => 
 
 test('refreshUpdateCache: a newer registry version reports updateAvailable', async () => {
   const fetchImpl = async (url) => {
-    assert.equal(url, 'https://registry.npmjs.org/showmd/latest');
+    assert.equal(url, 'https://registry.npmjs.org/showmd-cli/latest');
     return { ok: true, json: async () => ({ version: '999.0.0' }) };
   };
   await refreshUpdateCache(fetchImpl);

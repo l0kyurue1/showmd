@@ -3,14 +3,14 @@ require "language/node"
 class Showmd < Formula
   desc "Read and edit markdown in your browser"
   homepage "https://github.com/l0kyurue1/showmd"
-  url "https://registry.npmjs.org/showmd/-/showmd-0.1.0.tgz"
+  url "https://registry.npmjs.org/showmd-cli/-/showmd-cli-0.1.0.tgz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
   depends_on "node"
 
   livecheck do
-    url "https://registry.npmjs.org/showmd/latest"
+    url "https://registry.npmjs.org/showmd-cli/latest"
     strategy :json do |json|
       json["version"]
     end
