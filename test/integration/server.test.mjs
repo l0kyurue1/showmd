@@ -1,15 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { createServer } = require('../../server/server.js');
 
+// realpath, not just mkdtemp: windows hands back an 8.3 short name here
+// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
+// long filename does not match the short dir it was given
 function tmp(prefix) {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 // isolates settings- and history-backed routes from whatever this machine has for real
@@ -557,7 +560,7 @@ test('GET /: boot shell embeds escaped boot data as JSON before the module scrip
   }
 });
 
-test('GET /: a "<" in boot data (from the root dir name) is escaped so it cannot close the script tag early', async () => {
+test('GET /: a "<" in boot data (from the root dir name) is escaped so it cannot close the script tag early', { skip: process.platform === 'win32' && 'windows forbids < and > in a file name, so this root cannot exist' }, async () => {
   // the root's basename rides into boot.root.name verbatim; a name containing
   // "<script>" is the same shape of hazard the original renderShell unit test
   // covered, reached here through a real root instead of a hand-built object

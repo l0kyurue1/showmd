@@ -254,7 +254,7 @@ test('desktopEntry: Exec quoting escapes quotes and doubles percent signs in the
   assert.equal(execLine, 'Exec="/home/x/My \\"Apps\\"/100%% showmd-launch" %f');
 });
 
-test('installAppLinux writes an executable launcher and a desktop entry', () => {
+test('installAppLinux writes an executable launcher and a desktop entry', { skip: process.platform === 'win32' && 'windows has no executable mode bit to assert on' }, () => {
   const home = path.join(workDir, 'linux-home');
   const dataDir = path.join(home, 'data', 'showmd');
   const appsDir = path.join(home, 'data', 'applications');
@@ -662,7 +662,7 @@ test('launchSh: probes PATH and well-known locations for a replacement showmd, P
   assert.ok(missIdx < msgIdx);
 });
 
-test('launchSh: a probe hit launches through the found showmd, not through node', () => {
+test('launchSh: a probe hit launches through the found showmd, not through node', { skip: process.platform === 'win32' && 'no sh on windows' }, () => {
   const home = mkdtempSync(path.join(tmpdir(), 'showmd-probe-'));
   const localBin = path.join(home, '.local', 'bin');
   mkdirSync(localBin, { recursive: true });
@@ -687,8 +687,9 @@ echo "resolved=$cli"
 });
 
 test('launchSh: a probe miss (nothing on PATH, nothing at any candidate) resolves to empty', {
-  skip: (existsSync('/opt/homebrew/bin/showmd') || existsSync('/usr/local/bin/showmd'))
-    && 'this machine has a real showmd at a probed path, cannot exercise a genuine miss',
+  skip: (process.platform === 'win32' && 'no sh on windows')
+    || ((existsSync('/opt/homebrew/bin/showmd') || existsSync('/usr/local/bin/showmd'))
+      && 'this machine has a real showmd at a probed path, cannot exercise a genuine miss'),
 }, () => {
   const home = mkdtempSync(path.join(tmpdir(), 'showmd-probe-miss-'));
   const script = `

@@ -15,7 +15,7 @@
       "env": { "node": true, "commonjs": true, "es2024": true }
     },
     {
-      "files": ["test/**/*.mjs"],
+      "files": ["test/**/*.mjs", "scripts/**/*.mjs"],
       "env": { "node": true, "es2024": true }
     },
     {

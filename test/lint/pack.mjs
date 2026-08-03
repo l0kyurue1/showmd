@@ -22,7 +22,7 @@ const missing = [];
 for (const rel of shipped) {
   const src = fs.readFileSync(path.join(root, rel), 'utf8');
   for (const [, , spec] of src.matchAll(/require\((['"])(\.\.?\/[^'"]+)\1\)/g)) {
-    const target = path.relative(root, path.resolve(path.dirname(path.join(root, rel)), spec));
+    const target = path.relative(root, path.resolve(path.dirname(path.join(root, rel)), spec)).split(path.sep).join('/');
     if (!covered(target)) missing.push(`${rel} -> ${target}`);
   }
 }

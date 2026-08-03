@@ -1,21 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync , realpathSync} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..', '..');
 const PORT = 4401;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // fake HOME: keeps this machine's real ~/.claude/skills etc. out of the
 // discovery result, and isolates the shadow-history repos this run creates
-const fakeHome = mkdtempSync(path.join(tmpdir(), 'showmd-skills-home-'));
-const rootA = mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootA-'));
-const rootB = mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootB-'));
-const outsideA = mkdtempSync(path.join(tmpdir(), 'showmd-skills-outsideA-'));
+// realpath every temp root: windows hands back 8.3 short names here, and libuv
+// aborts a served process when a watch event's long filename does not match
+const fakeHome = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-home-')));
+const rootA = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootA-')));
+const rootB = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootB-')));
+const outsideA = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-outsideA-')));
 
 // `showmd skills <dir> <dir>` is PROJECT mode for both dirs: each needs its
 // own .agents/skills or .claude/skills marker to be picked up
@@ -73,7 +76,7 @@ test.before(async () => {
   child = spawn(
     'node',
     [path.join(PROJECT, 'bin', 'cli.js'), 'skills', rootA, rootB, '--no-open', '--port', String(PORT)],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome } }
+    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome } }
   );
   child.stdout.on('data', (d) => (stdout += d.toString()));
   child.stderr.on('data', (d) => (stderr += d.toString()));

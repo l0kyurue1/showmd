@@ -143,9 +143,9 @@ test('detectMdHandlerDefault: the uncached (no readPlist/plistPath/home) branch 
   let now = 1_000_000;
   _setMdHandlerCacheTestHooks({ now: () => now, readPlist });
 
-  const first = await detectMdHandlerDefault({ bundleId: 'io.github.l0kyurue1.showmd' });
+  const first = await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'io.github.l0kyurue1.showmd' });
   now += 1_000;
-  const second = await detectMdHandlerDefault({ bundleId: 'io.github.l0kyurue1.showmd' });
+  const second = await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'io.github.l0kyurue1.showmd' });
 
   assert.equal(first, true);
   assert.equal(second, true);
@@ -160,9 +160,9 @@ test('detectMdHandlerDefault: the uncached branch refetches once the TTL has ela
   let now = 2_000_000;
   _setMdHandlerCacheTestHooks({ now: () => now, readPlist });
 
-  await detectMdHandlerDefault({ bundleId: 'io.github.l0kyurue1.showmd' });
+  await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'io.github.l0kyurue1.showmd' });
   now += 10_001;
-  await detectMdHandlerDefault({ bundleId: 'io.github.l0kyurue1.showmd' });
+  await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'io.github.l0kyurue1.showmd' });
 
   assert.equal(calls, 2);
 });
@@ -174,8 +174,8 @@ test('detectMdHandlerDefault: the uncached branch keys the cache by bundleId, mi
   const readPlist = async () => { calls++; return { LSHandlers: [] }; };
   _setMdHandlerCacheTestHooks({ now: () => 3_000_000, readPlist });
 
-  await detectMdHandlerDefault({ bundleId: 'io.github.l0kyurue1.showmd' });
-  await detectMdHandlerDefault({ bundleId: 'com.apple.TextEdit' });
+  await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'io.github.l0kyurue1.showmd' });
+  await detectMdHandlerDefault({ platform: 'darwin', bundleId: 'com.apple.TextEdit' });
 
   assert.equal(calls, 2);
 });

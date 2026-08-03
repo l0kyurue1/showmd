@@ -1,14 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
+// realpath, not just mkdtemp: windows hands back an 8.3 short name here
+// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
+// long filename does not match the short dir it was given
 function tmp(prefix) {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 // isolates settings- and history-backed routes from whatever this machine has for real
@@ -17,6 +20,8 @@ process.env.SHOWMD_HISTORY_HOME = tmp('showmd-history-home-');
 
 const fakeHome = tmp('showmd-agentcfg-home-');
 process.env.HOME = fakeHome;
+// os.homedir() reads USERPROFILE on windows and ignores HOME
+process.env.USERPROFILE = fakeHome;
 mkdirSync(path.join(fakeHome, '.claude', 'rules'), { recursive: true });
 writeFileSync(path.join(fakeHome, '.claude', 'CLAUDE.md'), '# global rules\n');
 writeFileSync(path.join(fakeHome, '.claude', 'rules', '10-a.md'), '# rule a\n');

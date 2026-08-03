@@ -5,11 +5,14 @@ import { createServer } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..', '..');
 
-const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-cli-'));
+// realpath every temp root: windows hands back 8.3 short names here, and libuv
+// aborts a served process when a watch event's long filename does not match
+const workDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-')));
 const filePath = path.join(workDir, 'file.md');
 writeFileSync(filePath, '# hi\n');
 // isolates the default-port tests below from any settings.json a real user saved
@@ -93,7 +96,7 @@ test('default-port collision: two instances get distinct ports, both serve 200',
 test('a stale showmd on the default port is replaced, not yielded to', async () => {
   let squatter = null;
   let b = null;
-  const home = mkdtempSync(path.join(tmpdir(), 'showmd-takeover-home-'));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-takeover-home-')));
   try {
     const pinnedPort = await getFreePort();
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
@@ -126,7 +129,7 @@ test('a stale showmd on the default port is replaced, not yielded to', async () 
 test('silent default-port fallback names the squatter first, since it is another showmd', async () => {
   let a = null;
   let b = null;
-  const home = mkdtempSync(path.join(tmpdir(), 'showmd-warn-home-'));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-warn-home-')));
   try {
     // a dedicated free port pinned via settings.json, not the real 4321 — this
     // machine may already have an unrelated showmd (possibly predating
@@ -197,7 +200,7 @@ test('--help exit 0, --version matches package.json, unknown flag exit 1', async
 });
 
 test('install-skill: exits 0 and lands SKILL.md under a fake HOME', async () => {
-  const home = mkdtempSync(path.join(tmpdir(), 'showmd-installskill-'));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-installskill-')));
   mkdirSync(path.join(home, '.claude'), { recursive: true });
   try {
     const { child, state } = spawnCliArgs(['install-skill'], {
@@ -220,7 +223,7 @@ test('--launcher --no-open: boots with no root; /api/root gives dir null', async
   // a pinned free port + own settings home: the default port may already be
   // held by a real, same-version showmd launcher (e.g. the installed app),
   // in which case --launcher just opens that tab and never prints its banner
-  const home = mkdtempSync(path.join(tmpdir(), 'showmd-launcher-home-'));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-launcher-home-')));
   try {
     const pinnedPort = await getFreePort();
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
@@ -286,7 +289,7 @@ test('root classification matches the Document Store: .markdown and uppercase .M
 });
 
 test('bare `showmd` (no args) in a tmp dir still serves that dir', async () => {
-  const cwdDir = mkdtempSync(path.join(tmpdir(), 'showmd-cli-bare-'));
+  const cwdDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-bare-')));
   writeFileSync(path.join(cwdDir, 'bare.md'), '# bare\n');
   let p = null;
   try {

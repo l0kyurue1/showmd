@@ -220,18 +220,31 @@ function createHistory(gitExec = realGitExec) {
     return r.code === 0 ? r.stdout : null;
   }
 
-  async function prune(root) {
+  // deleting a repo out from under a running git leaves half-written objects
+  // behind (ENOTEMPTY) and spawns git into a directory that no longer exists,
+  // so a prune waits its turn in the same chain every commit uses
+  const rmRepo = (dir) => fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+
+  function prune(root) {
     const dir = historyDirFor(root);
-    await fsp.rm(dir, { recursive: true, force: true });
-    repoCache.delete(dir);
-    return dir;
+    return withGitLock(dir, async () => {
+      await rmRepo(dir);
+      repoCache.delete(dir);
+      return dir;
+    });
   }
 
-  async function pruneAll() {
+  function pruneAll() {
     const dir = pruneAllDir();
-    await fsp.rm(dir, { recursive: true, force: true });
-    repoCache.clear();
-    return dir;
+    const pending = [...gitLocks.values()];
+    const done = Promise.allSettled(pending).then(async () => {
+      await rmRepo(dir);
+      repoCache.clear();
+      return dir;
+    });
+    const settled = done.catch(() => {});
+    for (const key of gitLocks.keys()) gitLocks.set(key, settled);
+    return done;
   }
 
   async function diff(root, relPath, rev) {

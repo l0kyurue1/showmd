@@ -1,17 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync , realpathSync} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..', '..');
 const PORT = 4402;
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // fake HOME: keeps this machine's real ~/.claude out of the discovered tree
-const fakeHome = mkdtempSync(path.join(tmpdir(), 'showmd-agents-home-'));
+// realpath every temp root: windows hands back 8.3 short names here, and libuv
+// aborts a served process when a watch event's long filename does not match
+const fakeHome = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-agents-home-')));
 mkdirSync(path.join(fakeHome, '.claude'), { recursive: true });
 writeFileSync(path.join(fakeHome, '.claude', 'CLAUDE.md'), '# fake claude instructions\n');
 
@@ -42,7 +45,7 @@ test.before(async () => {
   child = spawn(
     'node',
     [path.join(PROJECT, 'bin', 'cli.js'), 'agents', '--no-open', '--port', String(PORT)],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome } }
+    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome } }
   );
   child.stdout.on('data', (d) => (stdout += d.toString()));
   child.stderr.on('data', (d) => (stderr += d.toString()));

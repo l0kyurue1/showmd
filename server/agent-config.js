@@ -31,8 +31,30 @@ const AGENTS = AGENT_REGISTRY.filter((a) => a.key).map((a) => ({
   projectsDir: a.projectsDir,
 }));
 
-// Claude Code's project slug folds both '/' and '.' into '-', which makes it
-// lossy to decode exactly; matched against ~/.claude.json's own project list
+// Claude Code slugs a project by replacing every non-alphanumeric character
+// with '-' — one for one, no collapsing, no case folding — then truncating to
+// SLUG_MAX with a hash suffix. The hash is not reproducible from outside, so an
+// over-long slug is matched on its truncated prefix instead.
+const SLUG_MAX = 200;
+
+function projectSlug(absPath) {
+  return absPath.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+// Windows preserves the case Claude Code recorded, but the same directory can
+// resolve as 'c:\...' or 'C:\...' depending on who asked.
+function slugKey(slug) {
+  return process.platform === 'win32' ? slug.toLowerCase() : slug;
+}
+
+function slugMatchesPath(slug, absPath) {
+  const want = slugKey(slug);
+  const computed = slugKey(projectSlug(absPath));
+  if (computed === want) return true;
+  return computed.length > SLUG_MAX && want.startsWith(`${computed.slice(0, SLUG_MAX)}-`);
+}
+
+// The slug is lossy, so it is matched against ~/.claude.json's own project list
 // (the same harvest skills.js does) to recover the real path where possible,
 // falling back to a best-effort slash-split of the slug itself. The visible
 // label is always just the directory basename, disambiguated with its parent
@@ -45,8 +67,10 @@ function projectLabelsFromSlugs(home, slugs) {
     claudeJson = null;
   }
   const known = claudeJson && typeof claudeJson.projects === 'object' ? Object.keys(claudeJson.projects) : [];
-  const bySlug = new Map(known.map((p) => [p.replace(/[/.]/g, '-'), p]));
-  const realPaths = new Map(slugs.map((slug) => [slug, bySlug.get(slug) || slug.replace(/^-/, '').replace(/-/g, '/')]));
+  const realPaths = new Map(slugs.map((slug) => [
+    slug,
+    known.find((p) => slugMatchesPath(slug, p)) || slug.replace(/^-/, '').replace(/-/g, '/'),
+  ]));
   const basenameCount = new Map();
   for (const real of realPaths.values()) {
     const base = path.basename(real);
@@ -76,9 +100,9 @@ function memoryProjects(agent, home, cwd) {
     .filter((p) => p.files.length > 0);
   if (withFiles.length === 0) return [];
   const labels = projectLabelsFromSlugs(home, withFiles.map((p) => p.slug));
-  const cwdSlug = cwd ? path.resolve(cwd).replace(/[/.]/g, '-') : null;
+  const cwdPath = cwd ? path.resolve(cwd) : null;
   return withFiles
-    .map((p) => ({ ...p, ...labels.get(p.slug), current: p.slug === cwdSlug }))
+    .map((p) => ({ ...p, ...labels.get(p.slug), current: cwdPath ? slugMatchesPath(p.slug, cwdPath) : false }))
     .sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0) || a.label.localeCompare(b.label));
 }
 
@@ -171,4 +195,4 @@ function agentKeyForId(id) {
   return agent ? agent.key : null;
 }
 
-module.exports = { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId };
+module.exports = { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId, projectSlug };

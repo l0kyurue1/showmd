@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,9 +14,14 @@ const { createServer } = require('../../server/server.js');
 // its own process
 const fakeHome = mkdtempSync(path.join(tmpdir(), 'showmd-pickroot-home-'));
 process.env.HOME = fakeHome;
+// os.homedir() reads USERPROFILE on windows and ignores HOME
+process.env.USERPROFILE = fakeHome;
 
+// realpath, not just mkdtemp: windows hands back an 8.3 short name here
+// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
+// long filename does not match the short dir it was given
 function tmp(prefix) {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 async function withServer(root, fn, extra = {}) {
@@ -406,10 +411,15 @@ test('GET /api/tree?view=skills: a skill file added under the served root busts 
 
       mkdirSync(path.join(root, '.agents', 'skills', 'two'), { recursive: true });
       writeFileSync(path.join(root, '.agents', 'skills', 'two', 'SKILL.md'), '# two\n');
-      // watcher debounce/settle: give chokidar's fs event time to land
-      await new Promise((r) => setTimeout(r, 300));
-
-      const second = await (await fetch(`${base}/api/tree?view=skills`)).json();
+      // chokidar's fs event lands on its own schedule, and a loaded CI runner
+      // is far slower than a laptop, so poll instead of guessing one interval
+      let second = first;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        second = await (await fetch(`${base}/api/tree?view=skills`)).json();
+        if (JSON.stringify(second) !== JSON.stringify(first)) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
       assert.notDeepEqual(second, first, 'the watcher busted the cache — the new skill shows up without a root swap');
     });
   } finally {
@@ -420,7 +430,7 @@ test('GET /api/tree?view=skills: a skill file added under the served root busts 
 // the folder a user picks can be one this process may not read (macOS grants
 // folder access per app, and the picked path is not always covered). Two
 // things must survive that: the server, and the truth that it failed.
-test('POST /api/pick-root: an unreadable dir -> tree 500 unreadable_root, and the server stays up', { skip: process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
+test('POST /api/pick-root: an unreadable dir -> tree 500 unreadable_root, and the server stays up', { skip: process.platform === 'win32' ? 'chmod does not restrict access on windows' : process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
   const root = tmp('showmd-pickroot-ok-');
   const denied = tmp('showmd-pickroot-denied-');
   try {

@@ -53,10 +53,36 @@ test('write refuses to escape the root', async () => {
   assert.deepEqual(await solo.write('../escape.md', Buffer.from('x')), { ok: false, code: 'forbidden' });
 });
 
-test('a write claims the watcher echo exactly once', async () => {
+// a save can raise more than one watcher event, so the echo is claimed for as
+// long as the file still holds what we wrote, not for one event only
+test('a write claims every watcher echo while the file still holds what we wrote', async () => {
   await solo.write('hello.md', Buffer.from('# Again\n'));
-  assert.equal(solo.consumeSelfWrite('hello.md'), true);
-  assert.equal(solo.consumeSelfWrite('hello.md'), false);
+  assert.equal(await solo.consumeSelfWrite('hello.md'), true);
+  assert.equal(await solo.consumeSelfWrite('hello.md'), true);
+});
+
+test('an echo for an earlier save is still ours after a later save stamped its own', async () => {
+  await solo.write('hello.md', Buffer.from('# One\n'));
+  const later = solo.write('hello.md', Buffer.from('# Two\n'));
+  assert.equal(await solo.consumeSelfWrite('hello.md'), true);
+  await later;
+  assert.equal(await solo.consumeSelfWrite('hello.md'), true);
+});
+
+test('an outside edit landing on top of our write is not claimed as the echo', async () => {
+  await solo.write('hello.md', Buffer.from('# Ours\n'));
+  writeFileSync(path.join(soloDir, 'hello.md'), '# Ours\ntheirs\n');
+  assert.equal(await solo.consumeSelfWrite('hello.md'), false);
+});
+
+test('concurrent writes to one document both succeed and the last one wins', async () => {
+  const [first, second] = await Promise.all([
+    solo.write('hello.md', Buffer.from('# One\n')),
+    solo.write('hello.md', Buffer.from('# Two\n')),
+  ]);
+  assert.deepEqual(first, { ok: true });
+  assert.deepEqual(second, { ok: true });
+  assert.equal(readFileSync(path.join(soloDir, 'hello.md'), 'utf8'), '# Two\n');
 });
 
 test('multi-root ids resolve inside their own group only', async () => {
@@ -322,7 +348,7 @@ test('readDirSafe: a missing directory returns [] instead of throwing', async ()
   assert.deepEqual(await readDirSafe(path.join(soloDir, 'does-not-exist')), []);
 });
 
-test('walkFiles strictRoot: an unreadable root throws with its errno, an unreadable subdir stays swallowed', { skip: process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
+test('walkFiles strictRoot: an unreadable root throws with its errno, an unreadable subdir stays swallowed', { skip: process.platform === 'win32' ? 'chmod does not restrict access on windows' : process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
   const denied = path.join(workDir, 'denied-root');
   mkdirSync(denied, { recursive: true });
   chmodSync(denied, 0o000);
@@ -360,7 +386,7 @@ test('tree: rootless with no view -> no_root', async () => {
   assert.deepEqual(await rootless.tree(null, {}), { ok: false, code: 'no_root' });
 });
 
-test('tree: an unreadable root -> unreadable_root carrying dir and errno', { skip: process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
+test('tree: an unreadable root -> unreadable_root carrying dir and errno', { skip: process.platform === 'win32' ? 'chmod does not restrict access on windows' : process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
   const denied = path.join(workDir, 'denied-store');
   mkdirSync(denied, { recursive: true });
   chmodSync(denied, 0o000);

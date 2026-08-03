@@ -39,9 +39,9 @@
     "icons": "node scripts/make-icons.js",
     "prepare": "npm run build",
     "prepublishOnly": "npm test",
-    "test:unit": "node --test test/unit/*.test.mjs test/unit/client/*.test.mjs",
-    "test:integration": "node --test test/integration/*.test.mjs",
-    "test:e2e": "node --test test/e2e/*.test.mjs",
+    "test:unit": "node scripts/run-tests.mjs test/unit",
+    "test:integration": "node scripts/run-tests.mjs test/integration",
+    "test:e2e": "node scripts/run-tests.mjs test/e2e",
     "test": "node test/lint/css-guard.mjs && node test/lint/pack.mjs && npm run test:lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:e2e",
     "test:lint": "oxlint -c .oxlintrc.json client server bin scripts test --deny no-undef",
     "typecheck": "tsc -p tsconfig.json"

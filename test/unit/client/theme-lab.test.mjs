@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseHex, contrast, oklch, parseRoot, audit } from '../../../client/theme-lab.js';
 
-const ROOT = path.resolve(new URL('.', import.meta.url).pathname, '..', '..', '..');
+const ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..');
 const CSS = readFileSync(path.join(ROOT, 'client/app.css'), 'utf8');
 
 test('parseHex handles 3/6/8-digit and alpha', () => {

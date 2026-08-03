@@ -236,12 +236,14 @@ function createServer(root, {
       watcher.on('all', (event, filePath) => {
         if (!isMarkdownFile(filePath)) return;
         const fullId = docs.idFor(r, filePath);
-        const external = !docs.consumeSelfWrite(fullId);
         clearTimeout(pendingTimers.get(fullId));
+        // ownership is decided once the burst has settled, against what is
+        // actually on disk — deciding per raw event miscounts either way when
+        // the platform coalesces or duplicates them
         pendingTimers.set(fullId, setTimeout(() => {
           pendingTimers.delete(fullId);
           broadcastSSE(sseClients, { path: fullId, event });
-          if (external) docs.recordExternalChange(fullId);
+          docs.recordIfExternal(fullId);
         }, 100));
       });
       survive(watcher, r.dir);
@@ -251,9 +253,13 @@ function createServer(root, {
       // every dot-segment, and that exclusion is load-bearing for the main
       // watcher (it must not emit SSE/history traffic for skill files). A
       // second, separate watcher busts the skills cache directly instead.
+      // ignoreInitial stays off here, unlike the tree watcher above: a file
+      // created while chokidar is still scanning is reported as an initial
+      // entry and would be swallowed, losing the invalidation for good. The
+      // only effect is dropping a cache, so replaying the scan costs nothing
       const skillsWatcher = chokidar.watch(
         ['.agents/skills', '.claude/skills'].map((rel) => path.join(r.dir, rel)),
-        { ignoreInitial: true }
+        { ignoreInitial: false }
       );
       skillsWatcher.on('all', () => skills.invalidate());
       survive(skillsWatcher, path.join(r.dir, '.*/skills'));

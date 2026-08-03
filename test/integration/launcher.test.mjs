@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -10,9 +10,14 @@ const { createServer } = require('../../server/server.js');
 
 const fakeHome = mkdtempSync(path.join(tmpdir(), 'showmd-launcher-home-'));
 process.env.HOME = fakeHome;
+// os.homedir() reads USERPROFILE on windows and ignores HOME
+process.env.USERPROFILE = fakeHome;
 
+// realpath, not just mkdtemp: windows hands back an 8.3 short name here
+// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
+// long filename does not match the short dir it was given
 function tmp(prefix) {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 async function withServer(root, fn, extra = {}) {

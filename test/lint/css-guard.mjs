@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(new URL('.', import.meta.url).pathname, '..', '..');
+const ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\brgba?\([^)]*\)|\bhsla?\([^)]*\)/g;
 
 const failures = [];

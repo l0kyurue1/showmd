@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId } = require('../../server/agent-config.js');
+const { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId, projectSlug } = require('../../server/agent-config.js');
 
 function tmp(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix));
@@ -52,12 +52,22 @@ test('buildAgentTree: CLAUDE.md + rules/*.md become one Instructions group, ids 
   }
 });
 
+// Claude Code's own encoding, recovered from the shipped binary. Spelled out
+// rather than computed so a regression in projectSlug cannot pass silently.
+test('projectSlug: every non-alphanumeric becomes one dash, case preserved', () => {
+  assert.equal(projectSlug('/Users/a/my.project'), '-Users-a-my-project');
+  assert.equal(projectSlug('C:\\Users\\foo\\my.project'), 'C--Users-foo-my-project');
+  assert.equal(projectSlug('/Users/a/Application Support'), '-Users-a-Application-Support');
+  assert.equal(projectSlug('/Users/a/iCloud~md~obsidian'), '-Users-a-iCloud-md-obsidian');
+  assert.equal(projectSlug('/Users/a/Moon@Cloud/snake_case'), '-Users-a-Moon-Cloud-snake-case');
+});
+
 test('buildAgentTree: memory groups by project, current cwd project sorts first', () => {
   const home = tmp('showmd-agent-home-');
   const project = tmp('showmd-agent-project-');
   try {
     const resolvedProject = path.resolve(project);
-    const slug = resolvedProject.replace(/[/.]/g, '-');
+    const slug = projectSlug(resolvedProject);
     const otherSlug = '-Users-someone-other-repo';
     mkdirSync(path.join(home, '.claude', 'projects', slug, 'memory'), { recursive: true });
     mkdirSync(path.join(home, '.claude', 'projects', otherSlug, 'memory'), { recursive: true });

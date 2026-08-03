@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -12,9 +12,11 @@ const { createServer } = require('../../server/server.js');
 // isolates the boot-time recents write (server.js's createServer) from
 // whatever this machine has for real, same trick as pick-root.test.mjs
 process.env.HOME = mkdtempSync(path.join(tmpdir(), 'showmd-sec-home-'));
+// os.homedir() reads USERPROFILE on windows and ignores HOME
+process.env.USERPROFILE = process.env.HOME;
 
 async function withServer(fn) {
-  const root = mkdtempSync(path.join(tmpdir(), 'showmd-sec-'));
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-sec-')));
   writeFileSync(path.join(root, 'a.md'), '# a\n');
   const server = createServer(root, {});
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

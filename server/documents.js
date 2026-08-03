@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { createHash } = require('node:crypto');
 const history = require('./history.js');
 
 // trust boundary: every filesystem path built from a request must resolve
@@ -21,11 +22,36 @@ function isValidRev(rev) {
   return /^[0-9a-f]{4,40}$/.test(rev);
 }
 
+// windows refuses the rename while anything else holds the target open — the
+// watcher, an indexer, a virus scanner — and the holder is gone within a tick
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
 async function writeFileAtomic(full, buffer) {
   const tmp = `${full}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await fsp.writeFile(tmp, buffer);
-  await fsp.rename(tmp, full);
+  try {
+    await fsp.rename(tmp, full);
+  } catch (err) {
+    if (!RENAME_RETRY_CODES.has(err.code)) {
+      await fsp.rm(tmp, { force: true });
+      throw err;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      await fsp.rename(tmp, full);
+    } catch (retryErr) {
+      await fsp.rm(tmp, { force: true });
+      throw retryErr;
+    }
+  }
 }
+
+// a self-write mark whose watcher event never arrived must not swallow an
+// unrelated edit minutes later
+const SELF_WRITE_TTL_MS = 5000;
+const SELF_WRITE_KEEP = 8;
+
+const digest = (buffer) => createHash('sha1').update(buffer).digest('hex');
 
 const FORBIDDEN = { ok: false, code: 'forbidden' };
 const NOT_FOUND = { ok: false, code: 'not_found' };
@@ -96,7 +122,30 @@ const walkMd = (dir, root, out) => walkFiles(dir, root, out, { filter: isMarkdow
 // a filesystem path.
 function createDocumentStore(initialRoots, multi, historyImpl = history) {
   let roots = initialRoots;
-  const selfWrites = new Set();
+  // one hash per document is not enough: back-to-back saves each stamp their
+  // own, and a watcher event for the earlier one can arrive after the later one
+  // stamped, which would read our own content as somebody else's
+  const selfWrites = new Map();
+  function freshMarks(id) {
+    const marks = (selfWrites.get(id) || []).filter((m) => Date.now() - m.at <= SELF_WRITE_TTL_MS);
+    if (marks.length) selfWrites.set(id, marks);
+    else selfWrites.delete(id);
+    return marks;
+  }
+
+  // two PUTs to one document otherwise rename onto the same target at the same
+  // moment, which windows fails outright
+  const writeLocks = new Map();
+  function withWriteLock(id, fn) {
+    const tail = writeLocks.get(id) || Promise.resolve();
+    const run = tail.then(fn, fn);
+    const settled = run.catch(() => {});
+    writeLocks.set(id, settled);
+    settled.then(() => {
+      if (writeLocks.get(id) === settled) writeLocks.delete(id);
+    });
+    return run;
+  }
 
   /**
    * @param {string} id
@@ -120,6 +169,22 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
     return full && { dir, rel, full };
   }
 
+  // the watcher fires for our own writes too. Event counting cannot tell the
+  // two apart: macOS coalesces our write and an outside edit that lands right
+  // after it into one event, and a lone save can raise two. What holds is the
+  // content — if the file still reads back something we wrote, the event was
+  // ours; anything else came from outside and earns a History entry.
+  async function isSelfWrite(id) {
+    const marks = freshMarks(id);
+    if (!marks.length) return false;
+    const loc = locate(id);
+    if (!loc) return false;
+    const current = await fsp.readFile(loc.full).catch(() => null);
+    if (current == null) return false;
+    const hash = digest(current);
+    return marks.some((m) => m.hash === hash);
+  }
+
   async function commitQuietly(loc, source) {
     try {
       await historyImpl.record(loc.dir, loc.rel, source);
@@ -128,16 +193,18 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
     }
   }
 
-  async function writeAt(id, loc, buffer, source) {
-    try {
-      selfWrites.add(id);
-      await writeFileAtomic(loc.full, buffer);
-    } catch {
-      selfWrites.delete(id);
-      return { ok: false, code: 'write_failed' };
-    }
-    await commitQuietly(loc, source);
-    return { ok: true };
+  function writeAt(id, loc, buffer, source) {
+    return withWriteLock(id, async () => {
+      const mark = { hash: digest(buffer), at: Date.now() };
+      selfWrites.set(id, [...freshMarks(id), mark].slice(-SELF_WRITE_KEEP));
+      try {
+        await writeFileAtomic(loc.full, buffer);
+      } catch {
+        return { ok: false, code: 'write_failed' };
+      }
+      await commitQuietly(loc, source);
+      return { ok: true };
+    });
   }
 
   async function withHistory(id, fn) {
@@ -308,15 +375,18 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
       });
     },
 
-    // the watcher fires for our own writes too; a claimed id is ours, anything
-    // else came from outside and earns a History entry
-    consumeSelfWrite(id) {
-      return selfWrites.delete(id);
-    },
+    consumeSelfWrite: isSelfWrite,
 
-    recordExternalChange(id) {
+    // classifying and committing must happen as one step, under the same lock a
+    // write takes: otherwise a save landing in between is committed here as
+    // somebody else's edit, and the save's own commit then finds nothing staged
+    recordIfExternal(id) {
       const loc = locate(id);
-      return loc ? commitQuietly(loc, history.SOURCES.external) : Promise.resolve();
+      if (!loc) return Promise.resolve();
+      return withWriteLock(id, async () => {
+        if (await isSelfWrite(id)) return;
+        await commitQuietly(loc, history.SOURCES.external);
+      });
     },
 
     setRoots(newRoots) {

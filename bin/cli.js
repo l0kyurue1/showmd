@@ -65,11 +65,16 @@ function probeShowmd(port, { timeout = 300 } = {}) {
   });
 }
 
-// lsof covers macOS and Linux, the only platforms this ships a launcher for
-// today; a pid is a nicety for the warning line, not load-bearing, so any
-// failure (including "no lsof", e.g. Windows) just omits it
+// more than a nicety for the warning line: takeover of a stale showmd below
+// refuses to kill anything it cannot identify, so no pid means an outdated
+// install keeps the port forever. Windows has no lsof, hence the netstat arm
 function findPidOnPort(port) {
   try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8');
+      const line = out.split('\n').find((l) => new RegExp(`\\s127\\.0\\.0\\.1:${port}\\s`).test(l) && l.includes('LISTENING'));
+      return line ? line.trim().split(/\s+/).pop() : null;
+    }
     return execFileSync('lsof', ['-ti', `tcp:${port}`], { stdio: ['ignore', 'pipe', 'ignore'] })
       .toString('utf8').trim().split('\n')[0] || null;
   } catch {

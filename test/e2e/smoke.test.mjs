@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, appendFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..', '..');
 // both servers bind port 0 and report back; hardcoded ports collide with
 // whatever else the machine (or a parallel CI job) already holds
@@ -14,7 +15,9 @@ let BASE;
 let PORT2;
 let BASE2;
 
-const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-smoke-'));
+// realpath: windows hands back an 8.3 short name, which makes libuv abort
+// when a watch event's long filename does not match the dir it was given
+const workDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-smoke-')));
 // keep every shadow repo inside the temp dir; the real home stays untouched.
 // settings home is isolated too, with updateCheck off, so this spawn never
 // makes the one outbound call showmd can make (npm test needs no network)
@@ -55,7 +58,30 @@ async function waitForPort(getOutput, timeoutMs = 10000) {
   }
 }
 
-async function collectSSE(url, ms) {
+// a commit lands when the watcher and git are done, not after a fixed nap; a
+// loaded CI runner outruns any interval short enough to keep the suite quick
+async function historyOfAtLeast(url, want, timeoutMs = 15000) {
+  const start = Date.now();
+  let hist = [];
+  for (;;) {
+    hist = await (await fetch(url)).json();
+    if (hist.length >= want || Date.now() - start > timeoutMs) return hist;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+// the same collector, but it closes as soon as every wanted path has shown up
+// rather than burning the whole window; a slow runner gets a longer ceiling
+// without making the fast case slow
+function collectSSEUntil(url, wantPaths, ms = 8000) {
+  const remaining = new Set(wantPaths);
+  return collectSSE(url, ms, (event) => {
+    remaining.delete(event.path);
+    return remaining.size === 0;
+  });
+}
+
+async function collectSSE(url, ms, until) {
   const controller = new AbortController();
   const events = [];
   const res = await fetch(url, { signal: controller.signal });
@@ -72,7 +98,10 @@ async function collectSSE(url, ms) {
       while ((idx = buf.indexOf('\n\n')) !== -1) {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
-        if (line.startsWith('data: ')) events.push(JSON.parse(line.slice('data: '.length)));
+        if (!line.startsWith('data: ')) continue;
+        const event = JSON.parse(line.slice('data: '.length));
+        events.push(event);
+        if (until?.(event)) controller.abort();
       }
     }
   } catch {
@@ -213,16 +242,14 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
 
   const vPut1 = await fetch(`${BASE}/api/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n' });
   assert.equal(vPut1.status, 204);
-  await new Promise((r) => setTimeout(r, 200));
-  let hist = await (await fetch(`${BASE}/api/history?path=${verEnc}`)).json();
+  let hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 1);
   assert.equal(hist.length, 1, 'one entry after first PUT');
   assert.equal(hist[0].source, 'user');
   assert.ok(hist[0].adds > 0 && hist[0].dels === 0, 'plausible adds/dels');
   console.log(`M3 criterion 1 PASS (a): PUT save -> 1 history entry: ${JSON.stringify(hist[0])}`);
 
   appendFileSync(verPath, 'external addition\n');
-  await new Promise((r) => setTimeout(r, 400));
-  hist = await (await fetch(`${BASE}/api/history?path=${verEnc}`)).json();
+  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 2);
   assert.equal(hist.length, 2, 'external edit adds a second entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 1 PASS (b): external edit -> new entry source=external: ${JSON.stringify(hist[0])}`);
@@ -234,14 +261,13 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
   const vPut3 = await fetch(`${BASE}/api/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n\nthird\n' });
   assert.equal(vPut3.status, 204);
   await new Promise((r) => setTimeout(r, 200));
-  hist = await (await fetch(`${BASE}/api/history?path=${verEnc}`)).json();
-  assert.equal(hist.length, 3, 'two PUTs ~2s apart amend into one new user entry');
+  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 3);
+  assert.equal(hist.length, 3, `two PUTs ~2s apart amend into one new user entry, got ${JSON.stringify(hist.map((e) => `${e.source}@${e.ts}`))}`);
   assert.equal(hist[0].source, 'user');
   console.log(`M3 criterion 2 PASS (amend): two PUTs 2s apart -> still one user entry, total=${hist.length}`);
 
   appendFileSync(verPath, 'another external edit\n');
-  await new Promise((r) => setTimeout(r, 400));
-  hist = await (await fetch(`${BASE}/api/history?path=${verEnc}`)).json();
+  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 4);
   assert.equal(hist.length, 4, 'external edit after amend window breaks it into a new entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 2 PASS (source break): external edit ends amend window, total=${hist.length}`);
@@ -276,7 +302,7 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
   sseController2.abort();
   assert.ok(restoreEvent, 'sse event received for restore');
   assert.equal(readFileSync(verPath, 'utf8'), '# V\n\nfirst\n', 'file on disk matches restored content');
-  hist = await (await fetch(`${BASE}/api/history?path=${verEnc}`)).json();
+  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, hist.length + 1);
   assert.equal(hist[0].source, 'restore', 'newest entry is a restore commit');
   console.log('M3 criterion 4 PASS: restore -> disk content matches (cat proof above), SSE event fired, history gained a restore entry: ' + JSON.stringify(restoreEvent));
 
@@ -299,8 +325,7 @@ test('concurrent double-PUT is safe: one clean user history entry, no index.lock
   ]);
   assert.ok(race1.status >= 200 && race1.status < 300, `race1 status ${race1.status}`);
   assert.ok(race2.status >= 200 && race2.status < 300, `race2 status ${race2.status}`);
-  await new Promise((r) => setTimeout(r, 300));
-  const raceHist = await (await fetch(`${BASE}/api/history?path=${raceEnc}`)).json();
+  const raceHist = await historyOfAtLeast(`${BASE}/api/history?path=${raceEnc}`, 1);
   assert.equal(raceHist[0].source, 'user', 'top entry after concurrent double-PUT is user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after concurrent double-PUT');
   console.log(`concurrency check 1 PASS: concurrent double-PUT -> both ${race1.status}/${race2.status}, top history entry ${JSON.stringify(raceHist[0])}, stderr clean`);
@@ -311,20 +336,19 @@ test('cross-contamination: external edit + immediate user PUT emit correct SSE a
   const crossAPath = path.join(servedRoot, 'crossA.md');
   const crossBEnc = encodeURIComponent('crossB.md');
   writeFileSync(crossAPath, '# A\n\ninitial\n');
-  await new Promise((r) => setTimeout(r, 400)); // let the initial external commit for A settle
+  await historyOfAtLeast(`${BASE}/api/history?path=crossA.md`, 1); // initial external commit for A
 
-  const crossEventsPromise = collectSSE(`${BASE}/api/events`, 800);
+  const crossEventsPromise = collectSSEUntil(`${BASE}/api/events`, ['crossA.md', 'crossB.md']);
   await new Promise((r) => setTimeout(r, 200));
   appendFileSync(crossAPath, 'external addition to A\n');
   const crossPutRes = await fetch(`${BASE}/api/raw?path=${crossBEnc}`, { method: 'PUT', body: '# B\n\nfrom user\n' });
   assert.equal(crossPutRes.status, 204);
   const crossEvents = await crossEventsPromise;
-  await new Promise((r) => setTimeout(r, 300)); // let A's async external commit finish
 
   assert.ok(crossEvents.some((e) => e.path === 'crossA.md'), 'SSE event for A arrived');
   assert.ok(crossEvents.some((e) => e.path === 'crossB.md'), 'SSE event for B arrived');
-  const histA = await (await fetch(`${BASE}/api/history?path=crossA.md`)).json();
-  const histB = await (await fetch(`${BASE}/api/history?path=${crossBEnc}`)).json();
+  const histA = await historyOfAtLeast(`${BASE}/api/history?path=crossA.md`, 2);
+  const histB = await historyOfAtLeast(`${BASE}/api/history?path=${crossBEnc}`, 1);
   assert.equal(histA[0].source, 'external', 'A entry stayed external');
   assert.equal(histB[0].source, 'user', 'B entry stayed user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after cross-contamination scenario');
@@ -334,18 +358,17 @@ test('cross-contamination: external edit + immediate user PUT emit correct SSE a
 test('two overlapping external writes both produce external history entries', async () => {
   const raceAPath = path.join(servedRoot, 'raceExtA.md');
   const raceBPath = path.join(servedRoot, 'raceExtB.md');
-  const raceEventsPromise = collectSSE(`${BASE}/api/events`, 800);
+  const raceEventsPromise = collectSSEUntil(`${BASE}/api/events`, ['raceExtA.md', 'raceExtB.md']);
   await new Promise((r) => setTimeout(r, 200));
   writeFileSync(raceAPath, '# race ext A\n');
   await new Promise((r) => setTimeout(r, 50));
   writeFileSync(raceBPath, '# race ext B\n');
   const raceEvents = await raceEventsPromise;
-  await new Promise((r) => setTimeout(r, 300));
 
   assert.ok(raceEvents.some((e) => e.path === 'raceExtA.md'), 'SSE event for raceExtA arrived');
   assert.ok(raceEvents.some((e) => e.path === 'raceExtB.md'), 'SSE event for raceExtB arrived');
-  const histRaceA = await (await fetch(`${BASE}/api/history?path=raceExtA.md`)).json();
-  const histRaceB = await (await fetch(`${BASE}/api/history?path=raceExtB.md`)).json();
+  const histRaceA = await historyOfAtLeast(`${BASE}/api/history?path=raceExtA.md`, 1);
+  const histRaceB = await historyOfAtLeast(`${BASE}/api/history?path=raceExtB.md`, 1);
   assert.equal(histRaceA[0].source, 'external', 'raceExtA entry is external');
   assert.equal(histRaceB[0].source, 'external', 'raceExtB entry is external');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after two overlapping external writes');
