@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.md\shell\showmd]
+@="Open in showmd"
+
+[HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\.md\shell\showmd\command]
+@="cmd /c showmd \"%1\""
