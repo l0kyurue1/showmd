@@ -114,11 +114,18 @@ test('cli started and printed URL', () => {
   console.log('criterion 1 PASS: cli started and printed URL\n' + stdout.trim());
 });
 
-test('lsof shows 127.0.0.1 binding, not wildcard', () => {
-  const lsofOut = execSync(`lsof -n -iTCP:${PORT} -sTCP:LISTEN`).toString();
-  assert.ok(lsofOut.includes(`127.0.0.1:${PORT}`), 'bound to 127.0.0.1');
-  assert.ok(!lsofOut.includes(`*:${PORT}`), 'must not bind to *');
-  console.log('criterion 2 PASS: lsof shows 127.0.0.1 binding\n' + lsofOut.trim());
+test('socket table shows 127.0.0.1 binding, not wildcard', () => {
+  // windows has no lsof; netstat prints the wildcard as 0.0.0.0 where lsof prints *
+  const isWindows = process.platform === 'win32';
+  const raw = isWindows
+    ? execSync('netstat -ano -p TCP').toString()
+    : execSync(`lsof -n -iTCP:${PORT} -sTCP:LISTEN`).toString();
+  const out = isWindows
+    ? raw.split('\n').filter((l) => l.includes(`:${PORT} `) && l.includes('LISTENING')).join('\n')
+    : raw;
+  assert.ok(out.includes(`127.0.0.1:${PORT}`), 'bound to 127.0.0.1');
+  assert.ok(!out.includes(isWindows ? `0.0.0.0:${PORT}` : `*:${PORT}`), 'must not bind to the wildcard address');
+  console.log('criterion 2 PASS: socket table shows 127.0.0.1 binding\n' + out.trim());
 });
 
 test('/, /api/tree, /api/raw serve ok; traversal rejected 403', async () => {
