@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": { "es2024": true },
+  "ignorePatterns": ["client/dist/**", "client/hljs-src.js", "client/editor-src.js"],
+  "rules": {
+    "no-undef": "error"
+  },
+  "overrides": [
+    {
+      "files": ["client/**/*.js"],
+      "env": { "browser": true, "es2024": true }
+    },
+    {
+      "files": ["server/**/*.js", "bin/**/*.js", "scripts/**/*.js"],
+      "env": { "node": true, "commonjs": true, "es2024": true }
+    },
+    {
+      "files": ["test/**/*.mjs"],
+      "env": { "node": true, "es2024": true }
+    },
+    {
+      "files": ["test/unit/client/**/*.mjs"],
+      "env": { "node": true, "browser": true, "es2024": true }
+    }
+  ]
+}

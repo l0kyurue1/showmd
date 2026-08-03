@@ -1,0 +1,71 @@
+{
+  "name": "showmd",
+  "version": "0.1.0",
+  "description": "Read and edit markdown in your browser.",
+  "license": "MIT",
+  "author": "Yu-Ruei Wan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/l0kyurue1/showmd.git"
+  },
+  "homepage": "https://github.com/l0kyurue1/showmd#readme",
+  "bugs": {
+    "url": "https://github.com/l0kyurue1/showmd/issues"
+  },
+  "keywords": [
+    "markdown",
+    "viewer",
+    "editor",
+    "preview",
+    "live-reload",
+    "cli",
+    "agent-skills"
+  ],
+  "bin": {
+    "showmd": "bin/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "server",
+    "client",
+    "skills",
+    "icons"
+  ],
+  "scripts": {
+    "build": "esbuild client/editor-src.js --bundle --minify --format=esm --outfile=client/dist/editor.js && esbuild client/hljs-src.js --bundle --minify --format=iife --outfile=client/dist/hljs.js && node scripts/vendor.js",
+    "icons": "node scripts/make-icons.js",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test",
+    "test:unit": "node --test test/unit/*.test.mjs test/unit/client/*.test.mjs",
+    "test:integration": "node --test test/integration/*.test.mjs",
+    "test:e2e": "node --test test/e2e/*.test.mjs",
+    "test": "node test/lint/css-guard.mjs && node test/lint/pack.mjs && npm run test:lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:lint": "oxlint -c .oxlintrc.json client server bin scripts test --deny no-undef",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@lezer/highlight": "^1.2.3",
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.1",
+    "highlight.js": "^11.11.1",
+    "jsdom": "^29.1.1",
+    "katex": "^0.18.1",
+    "markdown-it": "^14.1.0",
+    "mermaid": "^11.16.0",
+    "oxlint": "^1.76.0",
+    "typescript": "^7.0.2"
+  }
+}

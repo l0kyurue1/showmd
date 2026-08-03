@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": ["node"],
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "server/agent-registry.js",
+    "server/agent-config.js",
+    "server/skills.js",
+    "server/settings.js",
+    "client/api.js",
+    "types/*.d.ts"
+  ],
+  "exclude": ["node_modules", "client/dist"]
+}
