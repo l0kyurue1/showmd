@@ -193,7 +193,7 @@ if (process.argv[2] === 'install-app') {
   console.log(`showmd: installed ${dest}`);
   if (ephemeral) {
     console.error('showmd: warning — this copy lives in the npx cache and will be cleared.');
-    console.error('        run `npm i -g showmd && showmd install-app` for an app that lasts.');
+    console.error('        run `npm i -g showmd-cli && showmd install-app` for an app that lasts.');
   }
   installers.prebakeFolderPicker();
   return;

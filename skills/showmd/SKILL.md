@@ -18,7 +18,7 @@ stays in sync as you edit the file.
      is showmd.
    - If its `dir` covers the file you need, reuse it.
 2. **Start one if none is running**, in the background, without stealing focus:
-   - `npx -y showmd <dir> --no-open` (`-y` skips the first-run install
+   - `npx -y showmd-cli <dir> --no-open` (`-y` skips the first-run install
      prompt; npx fetches showmd automatically if it isn't installed)
    - `<dir>` is the folder containing the markdown file(s). If 4321 is busy,
      showmd falls back to a free port on its own; read the actual URL from
@@ -38,10 +38,10 @@ stays in sync as you edit the file.
 
 ## Other modes
 
-- `npx -y showmd skills` — browse the user's installed agent skills
+- `npx -y showmd-cli skills` — browse the user's installed agent skills
   (Claude Code, Codex, the shared `~/.agents/skills` store, ...). Modes:
   `skills all`, `skills global`, `skills <dir>`. Same server rules as above.
-- `npx -y showmd agents` — render the user's agent configuration (Claude
+- `npx -y showmd-cli agents` — render the user's agent configuration (Claude
   Code's `CLAUDE.md`, rules, and project memories, Codex's `AGENTS.md`).
   Also reachable in-app via the sidebar's Agents button or `⇧⌘A`. Same
   server rules as above.

@@ -15,7 +15,7 @@ test('showmd update available: title, command per channel, dismissible', () => {
   assert.equal(brew.dismissVersion, '0.2.0');
 
   const npmGlobal = buildUpdateCta({ updateAvailable: true, latestVersion: '0.2.0', updateChannel: 'npm-global' });
-  assert.equal(npmGlobal.command, 'npm i -g showmd@latest');
+  assert.equal(npmGlobal.command, 'npm i -g showmd-cli@latest');
 });
 
 test('npx and dev channels never produce the showmd-update state', () => {

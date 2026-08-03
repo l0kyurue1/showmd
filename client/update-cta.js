@@ -1,4 +1,4 @@
-const CHANNEL_COMMANDS = { brew: 'brew upgrade showmd', 'npm-global': 'npm i -g showmd@latest' };
+const CHANNEL_COMMANDS = { brew: 'brew upgrade showmd', 'npm-global': 'npm i -g showmd-cli@latest' };
 
 // dismissal is keyed by "the version being dismissed" rather than a bare
 // on/off flag, so a later release makes the CTA reappear on its own; the
