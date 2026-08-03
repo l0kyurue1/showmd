@@ -384,3 +384,11 @@ test('renderCta paints a pending release and stays empty when there is none', ()
   assert.equal(ui.cta.hidden, true);
   assert.equal(ui.cta.textContent, '');
 });
+
+test('renderCta puts a markup-bearing version in as text, not as HTML', () => {
+  const ui = mount();
+  localStorage.clear();
+  ui.view.renderCta({ updateAvailable: true, updateChannel: 'brew', latestVersion: '<img src=x onerror=alert(1)>' });
+  assert.equal(ui.cta.querySelector('img'), null);
+  assert.match(ui.cta.querySelector('.update-cta-title').textContent, /<img src=x onerror=alert\(1\)>/);
+});

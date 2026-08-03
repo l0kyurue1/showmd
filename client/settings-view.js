@@ -156,6 +156,42 @@ const COPY_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" st
 
 const UPDATE_CTA_DISMISS_KEY = 'showmd-update-cta-dismissed-version';
 
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function ctaButton(className, label, ariaLabel) {
+  const btn = el('button', className, label);
+  btn.type = 'button';
+  if (ariaLabel) btn.setAttribute('aria-label', ariaLabel);
+  return btn;
+}
+
+// vm.title and vm.command carry a version string fetched from the update
+// endpoint, so every field goes in as text, never as markup
+export function ctaNodes(vm) {
+  const nodes = [];
+  const head = el('div', 'update-cta-head');
+  head.appendChild(el('div', 'update-cta-title', vm.title));
+  if (vm.showDismiss) head.appendChild(ctaButton('update-cta-dismiss', '×', 'Dismiss until next version'));
+  nodes.push(head);
+
+  if (vm.command) {
+    const row = el('div', 'update-cta-command');
+    row.appendChild(el('code', null, vm.command));
+    const copy = ctaButton('update-cta-copy', null, 'Copy command');
+    copy.innerHTML = COPY_SVG;
+    row.appendChild(copy);
+    nodes.push(row);
+  }
+  if (vm.subline) nodes.push(el('div', 'update-cta-subline', vm.subline));
+  if (vm.buttonLabel) nodes.push(ctaButton(`update-cta-btn update-cta-btn-${vm.buttonWeight}`, vm.buttonLabel));
+  return nodes;
+}
+
 export function createSettingsView({
   root, ctaEl, api, fetchSettings, saveSetting,
   chevronSvg, positionTip,
@@ -323,14 +359,7 @@ export function createSettingsView({
     if (!vm) { ctaEl.hidden = true; ctaEl.replaceChildren(); return; }
     ctaEl.hidden = false;
     ctaEl.className = `update-cta update-cta-${vm.state}`;
-    ctaEl.innerHTML = `
-    <div class="update-cta-head">
-      <div class="update-cta-title">${vm.title}</div>
-      ${vm.showDismiss ? `<button type="button" class="update-cta-dismiss" aria-label="Dismiss until next version">×</button>` : ''}
-    </div>
-    ${vm.command ? `<div class="update-cta-command"><code>${vm.command}</code><button type="button" class="update-cta-copy" aria-label="Copy command">${COPY_SVG}</button></div>` : ''}
-    ${vm.subline ? `<div class="update-cta-subline">${vm.subline}</div>` : ''}
-    ${vm.buttonLabel ? `<button type="button" class="update-cta-btn update-cta-btn-${vm.buttonWeight}">${vm.buttonLabel}</button>` : ''}`;
+    ctaEl.replaceChildren(...ctaNodes(vm));
     ctaEl.querySelector('.update-cta-dismiss')?.addEventListener('click', () => {
       localStorage.setItem(UPDATE_CTA_DISMISS_KEY, vm.dismissVersion);
       renderCta(values);
