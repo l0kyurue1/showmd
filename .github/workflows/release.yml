@@ -1,0 +1,36 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      # trusted publishing needs npm 11.5.1+; node 24 ships close enough that
+      # this is usually a no-op, but a pinned runner image can lag
+      - run: npm install -g npm@latest
+      - name: tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          test "$tag" = "$pkg" || { echo "tag $tag != package.json $pkg"; exit 1; }
+      # runs prepare, so client/dist/ exists before the pack guard and e2e tests
+      - run: npm ci
+      # prepublishOnly runs the full suite; a separate npm test step would run
+      # it twice
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
