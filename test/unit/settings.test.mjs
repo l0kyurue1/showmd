@@ -69,3 +69,23 @@ test('writeJSONAtomic writes the file and leaves no tmp file behind', async () =
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { a: 1 });
   assert.deepEqual(readdirSync(path.dirname(file)), ['data.json']);
 });
+
+test('browser rejects names that could break out of a spawned shell command', async () => {
+  writeFileSync(settingsFile(), JSON.stringify({}));
+  for (const bad of ['firefox & calc', 'a"b', '/usr/bin/evil', '..\\evil', 'x|y', 'x;y', 'x$(id)', 'x\ny', '', 'x'.repeat(65)]) {
+    const result = await writeSettings({ browser: bad });
+    assert.equal(result.browser, 'default', `${JSON.stringify(bad)} should be rejected`);
+  }
+});
+
+test('browser accepts the plain names the picker actually offers', async () => {
+  for (const good of ['default', 'firefox', 'google-chrome-stable', 'Google Chrome', 'Brave Browser']) {
+    writeFileSync(settingsFile(), JSON.stringify({}));
+    assert.equal((await writeSettings({ browser: good })).browser, good);
+  }
+});
+
+test('a hand-edited settings file cannot smuggle a shell-unsafe browser past readSettings', async () => {
+  writeFileSync(settingsFile(), JSON.stringify({ browser: 'firefox & calc' }));
+  assert.equal((await readSettings()).browser, 'default');
+});

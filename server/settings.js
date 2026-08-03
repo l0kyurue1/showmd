@@ -15,12 +15,19 @@ const DEFAULTS = {
 
 const FONT_PRESETS = ['default', 'serif', 'mono'];
 
+// trust boundary: this value reaches spawn() in bin/cli.js — as an argument to
+// `cmd /c start` on Windows, as the executable itself elsewhere. Detected names
+// are plain app names ("Google Chrome") or Linux binaries ("google-chrome"), so
+// anything with a path separator, a shell metacharacter, or a control character
+// did not come from the picker and must not be run.
+const BROWSER_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._+-]*$/;
+
 const VALIDATORS = {
   colorMode: (v) => v === 'system' || v === 'light' || v === 'dark',
   openMode: (v) => v === 'read' || v === 'edit',
   fontPreset: (v) => FONT_PRESETS.includes(v),
   fontSize: (v) => typeof v === 'number' && Number.isFinite(v) && v >= 10 && v <= 32,
-  browser: (v) => typeof v === 'string' && v.length > 0,
+  browser: (v) => typeof v === 'string' && v.length <= 64 && BROWSER_NAME.test(v),
   port: (v) => Number.isInteger(v) && v >= 1024 && v <= 65535,
   updateCheck: (v) => typeof v === 'boolean',
 };
