@@ -359,3 +359,26 @@ test('refreshTree: a successful skills-tree refresh applies the new tree', async
   assert.equal(h.document.getElementById('save-chip-text').textContent !== 'Refresh failed', true);
   assert.deepEqual(h.errors, []);
 });
+
+test('installing from the update banner also refreshes the app row in settings', async () => {
+  const settings = {
+    appInstalled: true, appStale: true, appStaleReason: 'version',
+    appVersion: '0.1.0', showmdVersion: '0.1.1', platform: 'darwin',
+    appPath: '/Applications/ShowMD.app',
+  };
+  const h = await bootApp({ root: { dir: '/tmp/proj', name: 'proj' }, tree: ['a.md'], files: { 'a.md': '# T' }, settings });
+  h.fetch.on('POST', '/api/install-app', () => {
+    Object.assign(settings, { appStale: false, appStaleReason: null, appVersion: '0.1.1' });
+    return { body: { ok: true } };
+  });
+
+  h.click(h.document.querySelector('.nav-footer-gear'));
+  const rowBtn = () => h.document.querySelector('[data-key="installApp"] .settings-row-control button:not(.settings-reset-btn)');
+  await h.waitFor(() => rowBtn());
+  assert.equal(rowBtn().textContent, 'Update');
+
+  h.click(h.document.querySelector('.update-cta-btn'));
+  await h.waitFor(() => rowBtn().textContent === 'Installed');
+  assert.equal(rowBtn().disabled, true);
+  assert.deepEqual(h.errors, []);
+});

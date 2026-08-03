@@ -345,11 +345,13 @@ export function createSettingsView({
         const res = await api.installApp();
         if (!res.ok) throw new Error();
         justUpdatedVersion = values.showmdVersion;
-        renderCta(values);
+        // refreshDerived, not renderCta: the install also changes the settings
+        // rows, and they are patched from the same fetched values
+        await refreshDerived();
         setTimeout(() => {
           justUpdatedVersion = null;
           ctaEl.classList.add('update-cta-collapsing');
-          setTimeout(() => fetchSettings().then(renderCta), 300);
+          setTimeout(() => refreshDerived(), 300);
         }, 3000);
       } catch {
         btn.disabled = false;
