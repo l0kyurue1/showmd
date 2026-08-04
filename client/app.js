@@ -776,7 +776,9 @@ home.switcherBtn.addEventListener('click', () => {
   if (isSourceView(viewState.view)) { exitSourceView(); return; }
   if (home.switcherMenu.hidden) home.openSwitcherMenu(); else home.closeSwitcherMenu();
 });
-home.switcherOpenBtn.addEventListener('click', () => home.pickRoot({}));
+for (const btn of [home.switcherOpenFolderBtn, home.switcherOpenFileBtn]) {
+  btn.addEventListener('click', () => home.openTarget(btn.dataset.kind, undefined, btn));
+}
 home.switcherHomeBtn.addEventListener('click', async () => {
   home.closeSwitcherMenu();
   if (isSourceView(viewState.view)) await leaveSourceView();

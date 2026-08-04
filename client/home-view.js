@@ -23,7 +23,8 @@ export function createHomeView({
   </button>
   <div class="root-switcher-menu" hidden>
     <div class="root-switcher-path"></div>
-    <button type="button" class="root-switcher-open">${svg.folderPlus}<span>Open…</span></button>
+    <button type="button" class="root-switcher-open" data-kind="open-folder">${svg.folderPlus}<span>Open folder</span></button>
+    <button type="button" class="root-switcher-open" data-kind="open-file">${svg.file}<span>Open file</span></button>
     <button type="button" class="root-switcher-home">${svg.home}<span>Back to home</span></button>
     <div class="root-switcher-notice" hidden></div>
     <div class="root-switcher-recent-wrap" hidden>
@@ -37,7 +38,8 @@ export function createHomeView({
   const switcherChevronEl = switcherEl.querySelector('.root-switcher-chevron');
   const switcherMenu = switcherEl.querySelector('.root-switcher-menu');
   const switcherPathEl = switcherEl.querySelector('.root-switcher-path');
-  const switcherOpenBtn = switcherEl.querySelector('.root-switcher-open');
+  const switcherOpenFolderBtn = switcherEl.querySelector('.root-switcher-open[data-kind="open-folder"]');
+  const switcherOpenFileBtn = switcherEl.querySelector('.root-switcher-open[data-kind="open-file"]');
   const switcherHomeBtn = switcherEl.querySelector('.root-switcher-home');
   const switcherNoticeEl = switcherEl.querySelector('.root-switcher-notice');
   const switcherRecentWrap = switcherEl.querySelector('.root-switcher-recent-wrap');
@@ -171,12 +173,13 @@ export function createHomeView({
     footerEl.classList.toggle('narrow', narrow && isSourceView(viewState.view));
   }
 
-  async function pickRoot(body, notify = showSwitcherNotice) {
-    const openLabel = switcherOpenBtn.querySelector('span');
-    if (!body.dir) {
+  async function pickRoot(body, notify = showSwitcherNotice, busyEl = null) {
+    const openLabel = busyEl && busyEl.querySelector('span');
+    const restoreLabel = openLabel && openLabel.textContent;
+    if (!body.dir && busyEl) {
       // native dialog takes ~1-2s to spawn (osascript + AppKit load); show it
-      switcherOpenBtn.disabled = true;
-      openLabel.textContent = 'Opening…';
+      busyEl.disabled = true;
+      if (openLabel) openLabel.textContent = 'Opening…';
     }
     try {
       const res = await api.pickRoot(body);
@@ -193,9 +196,17 @@ export function createHomeView({
     } catch {
       notify('Could not open folder.');
     } finally {
-      switcherOpenBtn.disabled = false;
-      openLabel.textContent = 'Open…';
+      if (busyEl) {
+        busyEl.disabled = false;
+        if (openLabel) openLabel.textContent = restoreLabel;
+      }
     }
+  }
+
+  function openTarget(kind, notify, busyEl = null) {
+    return kind === 'open-file'
+      ? pickRoot({ mode: 'file' }, notify, busyEl)
+      : pickRoot({ mode: 'folder', startDir: blockedDir || undefined }, notify, busyEl);
   }
 
   function showLauncherNotice(text, { sticky = false } = {}) {
@@ -290,8 +301,7 @@ export function createHomeView({
   function activateLauncherRow(el) {
     const kind = el.dataset.kind;
     clearLauncherNotice();
-    if (kind === 'open-folder') pickRoot({ mode: 'folder', startDir: blockedDir || undefined }, stickyLauncherNotice);
-    else if (kind === 'open-file') pickRoot({ mode: 'file' }, stickyLauncherNotice);
+    if (kind === 'open-folder' || kind === 'open-file') openTarget(kind, stickyLauncherNotice);
     else if (kind === 'browse-skills') { setReturnTo('home'); launcherBrowseSkills(); }
     else if (kind === 'browse-agent-config') { setReturnTo('home'); launcherBrowseAgentConfig(); }
     else if (kind === 'settings') enterSettingsView();
@@ -354,8 +364,8 @@ export function createHomeView({
   });
 
   return {
-    switcherEl, switcherBtn, switcherOpenBtn, switcherHomeBtn, switcherMenu,
-    pickRoot, renderSwitcher, renderNavFooterNarrow,
+    switcherEl, switcherBtn, switcherOpenFolderBtn, switcherOpenFileBtn, switcherHomeBtn, switcherMenu,
+    pickRoot, openTarget, renderSwitcher, renderNavFooterNarrow,
     openSwitcherMenu, closeSwitcherMenu,
     showLauncherNotice,
     launcherBrowseSkills, launcherBrowseAgentConfig, activateLauncherRow,
