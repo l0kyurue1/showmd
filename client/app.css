@@ -942,7 +942,14 @@ body.launcher-boot #launcher-view[hidden] { display: flex; }
 .launcher-row[data-kind="recent"]:hover .launcher-row-delete { display: flex; }
 .launcher-row-delete:hover { opacity: 1; background: var(--hover); color: var(--ink); }
 .launcher-error { padding: 0 10px; font-size: 12.5px; color: var(--del); }
+.launcher-foot-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
 .launcher-foot { display: flex; justify-content: center; gap: 18px; font-size: 12px; color: var(--muted); }
+.launcher-about {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: color-mix(in srgb, var(--muted), var(--faint)); text-decoration: none;
+  transition: color .15s;
+}
+.launcher-about:hover { color: var(--ink); }
 .launcher-foot span { display: flex; gap: 6px; align-items: center; }
 .launcher-foot kbd {
   font-family: var(--sans); font-size: 10px; letter-spacing: .5px;
