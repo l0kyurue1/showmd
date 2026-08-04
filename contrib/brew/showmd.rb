@@ -3,8 +3,8 @@ require "language/node"
 class Showmd < Formula
   desc "Read and edit markdown in your browser"
   homepage "https://github.com/l0kyurue1/showmd"
-  url "https://registry.npmjs.org/showmd-cli/-/showmd-cli-0.1.2.tgz"
-  sha256 "cb709dafa26267337d17e7093c680fdcd12a7b9aeac8cef02d0f30b0dcaee535"
+  url "https://registry.npmjs.org/showmd-cli/-/showmd-cli-0.1.3.tgz"
+  sha256 "5c50a716e7d70d070edae107444358ba041e586e91384ec9470ee527b04fcbe8"
   license "MIT"
 
   depends_on "node"
