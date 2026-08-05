@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { restartArgv } = require('../../server/server.js');
-const { buildRevealCommand } = require('../../server/reveal.js');
+const { buildRevealCommand, revealErrorIsBenign } = require('../../server/reveal.js');
 
 test('restartArgv: strips --port <n>, appends --no-open', () => {
   assert.deepEqual(
@@ -44,4 +44,17 @@ test('buildRevealCommand: win32 -> explorer /select,<file>', () => {
 
 test('buildRevealCommand: linux (and any other platform) -> xdg-open <dirname>', () => {
   assert.deepEqual(buildRevealCommand('linux', '/a/b/c.md'), { cmd: 'xdg-open', args: ['/a/b'] });
+});
+
+test('revealErrorIsBenign: explorer exit 1 means success, not failure (regression)', () => {
+  assert.equal(revealErrorIsBenign('win32', { code: 1 }), true);
+});
+
+test('revealErrorIsBenign: a missing explorer is still a real failure', () => {
+  assert.equal(revealErrorIsBenign('win32', { code: 'ENOENT' }), false);
+});
+
+test('revealErrorIsBenign: exit 1 elsewhere is a real failure', () => {
+  assert.equal(revealErrorIsBenign('darwin', { code: 1 }), false);
+  assert.equal(revealErrorIsBenign('linux', { code: 1 }), false);
 });

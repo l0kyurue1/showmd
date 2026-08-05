@@ -4,10 +4,16 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
+const proc = require('./proc.js');
 
-const execFileAsync = promisify(execFile);
+// mirrors promisify(execFile): an error's own .stdout carries whatever the
+// command printed before it exited non-zero, which realGitExec relies on
+async function execFileAsync(cmd, args, opts) {
+  const { err, stdout } = await proc.tryRun(cmd, args, opts);
+  if (err) { err.stdout = stdout; throw err; }
+  return { stdout };
+}
+
 const AMEND_WINDOW_MS = 60000;
 
 const SOURCES = {

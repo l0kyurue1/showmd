@@ -42,7 +42,7 @@
     "test:unit": "node scripts/run-tests.mjs test/unit",
     "test:integration": "node scripts/run-tests.mjs test/integration",
     "test:e2e": "node scripts/run-tests.mjs test/e2e",
-    "test": "node test/lint/css-guard.mjs && node test/lint/pack.mjs && npm run test:lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test": "node test/lint/css-guard.mjs && node test/lint/pack.mjs && node test/lint/proc-seam-guard.mjs && npm run test:lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:e2e",
     "test:lint": "oxlint -c .oxlintrc.json client server bin scripts test --deny no-undef",
     "typecheck": "tsc -p tsconfig.json"
   },

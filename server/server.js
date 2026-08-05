@@ -2,7 +2,7 @@
 const http = require('node:http');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const proc = require('./proc.js');
 const { createDocumentStore, safeResolve, isMarkdownFile, classifyRootTarget } = require('./documents.js');
 const { defaultRevealFile, defaultOpenInfoWindow } = require('./reveal.js');
 const { createFolderPicker } = require('./folder-picker.js');
@@ -295,7 +295,7 @@ function createServer(root, {
   // with whatever settings were just saved (a new port, say)
   function defaultRestart() {
     const argv = restartArgv(process.argv.slice(1));
-    spawn(process.execPath, argv, { cwd: process.cwd(), env: process.env, stdio: 'ignore', detached: true }).unref();
+    proc.launchDetached(process.execPath, argv, { cwd: process.cwd(), env: process.env }).unref();
     server.close(() => process.exit(0));
   }
   const restart = restartFn || defaultRestart;

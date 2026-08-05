@@ -2,9 +2,14 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { execFile } = require('node:child_process');
-const execFileP = require('node:util').promisify(execFile);
+const proc = require('./proc.js');
 const { isDirEntry } = require('./documents.js');
+
+async function execFileP(cmd, args, opts) {
+  const { err, stdout } = await proc.tryRun(cmd, args, opts);
+  if (err) throw err;
+  return { stdout };
+}
 
 const LINUX_BROWSERS = ['firefox', 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'brave-browser', 'microsoft-edge'];
 

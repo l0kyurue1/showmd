@@ -2,8 +2,21 @@
 const path = require('node:path');
 const os = require('node:os');
 const nodeFsp = require('node:fs/promises');
-const { execFile: nodeExecFile } = require('node:child_process');
-const nodeExecFileP = require('node:util').promisify(nodeExecFile);
+const proc = require('./proc.js');
+
+// preserves the node:child_process execFile/promisify(execFile) shapes so
+// createFolderPicker's injection points don't have to change
+function nodeExecFile(cmd, args, optsOrCb, maybeCb) {
+  const opts = typeof optsOrCb === 'function' ? {} : optsOrCb;
+  const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+  proc.tryRun(cmd, args, opts).then(({ err, stdout }) => cb(err, stdout));
+}
+
+async function nodeExecFileP(cmd, args, opts) {
+  const { err, stdout } = await proc.tryRun(cmd, args, opts);
+  if (err) throw err;
+  return { stdout };
+}
 
 const PICKER_APP_VERSION = '0.1.3';
 
@@ -172,7 +185,7 @@ function createFolderPicker({
         ? `Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='Markdown (*.md;*.markdown)|*.md;*.markdown'; if($d.ShowDialog() -eq 'OK'){$d.FileName}else{'__CANCELED__'}`
         : `Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){$d.SelectedPath}else{'__CANCELED__'}`;
       return new Promise((resolve, reject) => {
-        execFile('powershell', ['-NoProfile', '-STA', '-Command', script], (err, stdout) => {
+        execFile('powershell', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true }, (err, stdout) => {
           if (err) return reject(err);
           const out = stdout.trim();
           resolve(out === '__CANCELED__' ? null : out);

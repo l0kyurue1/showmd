@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const proc = require('./proc.js');
 const { createFolderPicker } = require('./folder-picker.js');
 const { platformDataDir } = require('./settings.js');
 
@@ -329,7 +329,7 @@ function installApp(opts = {}) {
   const src = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'showmd-app-')), 'ShowMD.applescript');
   fs.writeFileSync(src, appleScript(node, cli));
   try {
-    execFileSync('osacompile', ['-s', '-o', dest, src], { stdio: 'pipe' });
+    proc.capture('osacompile', ['-s', '-o', dest, src], { stdio: 'pipe' });
   } finally {
     fs.rmSync(path.dirname(src), { recursive: true, force: true });
   }
@@ -342,7 +342,7 @@ function installApp(opts = {}) {
   fs.copyFileSync(docIcon(opts), path.join(resources, 'showmd-doc.icns'));
 
   const plist = path.join(dest, 'Contents', 'Info.plist');
-  const plutil = (...args) => execFileSync('plutil', [...args, plist], { stdio: 'pipe' });
+  const plutil = (...args) => proc.capture('plutil', [...args, plist], { stdio: 'pipe' });
   try {
     plutil('-remove', 'CFBundleIconName');
   } catch {
@@ -372,7 +372,7 @@ function installApp(opts = {}) {
   plutil('-replace', 'CFBundleDocumentTypes', '-json',
     JSON.stringify(keepMd ? [FOLDER_TYPE, MD_TYPE] : [FOLDER_TYPE]));
   reseal(dest, opts);
-  if (keepMd) execFileSync(opts.lsregister || LSREGISTER, ['-f', dest], { stdio: 'pipe' });
+  if (keepMd) proc.capture(opts.lsregister || LSREGISTER, ['-f', dest], { stdio: 'pipe' });
 
   return { dest, cli, ephemeral: isEphemeral(cli) };
 }
@@ -382,7 +382,7 @@ function installApp(opts = {}) {
 // again after each install. Best-effort: a bundle that will not sign still runs
 function reseal(dest, opts = {}) {
   try {
-    execFileSync(opts.codesign || 'codesign', ['--force', '--sign', '-', dest], { stdio: 'pipe' });
+    proc.capture(opts.codesign || 'codesign', ['--force', '--sign', '-', dest], { stdio: 'pipe' });
   } catch {}
 }
 
@@ -408,9 +408,9 @@ function registerMarkdownHandler(opts = {}) {
   // bundles installed before the document icon shipped have no copy of it
   const docDest = path.join(dest, 'Contents', 'Resources', 'showmd-doc.icns');
   if (!fs.existsSync(docDest)) fs.copyFileSync(docIcon(opts), docDest);
-  execFileSync('plutil', ['-replace', 'CFBundleDocumentTypes', '-json', JSON.stringify([FOLDER_TYPE, MD_TYPE]), plist], { stdio: 'pipe' });
+  proc.capture('plutil', ['-replace', 'CFBundleDocumentTypes', '-json', JSON.stringify([FOLDER_TYPE, MD_TYPE]), plist], { stdio: 'pipe' });
   reseal(dest, opts);
-  execFileSync(opts.lsregister || LSREGISTER, ['-f', dest], { stdio: 'pipe' });
+  proc.capture(opts.lsregister || LSREGISTER, ['-f', dest], { stdio: 'pipe' });
   return { dest };
 }
 
@@ -547,7 +547,7 @@ function installAppWin(opts = {}) {
 
   fs.mkdirSync(startMenuDir, { recursive: true });
   const lnk = winDest({ ...opts, startMenuDir });
-  execFileSync('powershell', ['-NoProfile', '-Command', lnkPs1({ lnk, ps1, icon })], { stdio: 'pipe' });
+  proc.capture('powershell', ['-NoProfile', '-Command', lnkPs1({ lnk, ps1, icon })], { stdio: 'pipe' });
 
   return { dest: lnk, cli, ephemeral: isEphemeral(cli) };
 }

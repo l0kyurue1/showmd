@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { spawn, execFileSync } = require('node:child_process');
+const proc = require('../server/proc.js');
 const { createServer } = require('../server/server.js');
 const { classifyRootTarget } = require('../server/documents.js');
 const VERSION = require('../package.json').version;
@@ -65,24 +65,35 @@ function probeShowmd(port, { timeout = 300 } = {}) {
   });
 }
 
+// netstat's STATE column is localized ("ESCUCHANDO"), so the listener is found
+// by local address: an accepted connection to it belongs to the same process
+function parseNetstatPid(output, port) {
+  for (const line of output.split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5 || parts[0].toUpperCase() !== 'TCP') continue;
+    if (parts[1] !== `127.0.0.1:${port}`) continue;
+    if (/^\d+$/.test(parts[4])) return parts[4];
+  }
+  return null;
+}
+
 // more than a nicety for the warning line: takeover of a stale showmd below
 // refuses to kill anything it cannot identify, so no pid means an outdated
 // install keeps the port forever. Windows has no lsof, hence the netstat arm
 function findPidOnPort(port) {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8');
-      const line = out.split('\n').find((l) => new RegExp(`\\s127\\.0\\.0\\.1:${port}\\s`).test(l) && l.includes('LISTENING'));
-      return line ? line.trim().split(/\s+/).pop() : null;
+      const out = proc.capture('netstat', ['-ano', '-p', 'TCP'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8');
+      return parseNetstatPid(out, port);
     }
-    return execFileSync('lsof', ['-ti', `tcp:${port}`], { stdio: ['ignore', 'pipe', 'ignore'] })
+    return proc.capture('lsof', ['-ti', `tcp:${port}`], { stdio: ['ignore', 'pipe', 'ignore'] })
       .toString('utf8').trim().split('\n')[0] || null;
   } catch {
     return null;
   }
 }
 
-module.exports = { resolveSkillsMode, formatPortWarning, probeShowmd, findPidOnPort };
+module.exports = { resolveSkillsMode, formatPortWarning, probeShowmd, findPidOnPort, parseNetstatPid, buildOpenBrowserCommand, openBrowser };
 
 // top-level return keeps `require` of this file (tests) from running the CLI
 if (require.main !== module) return;
@@ -109,12 +120,26 @@ Options:
   if (argv.includes('--version') || argv.includes('-v')) { console.log(VERSION); return; }
 }
 
-function openBrowser(url, browser) {
+// pure so tests can assert the argv for all three platforms without spawning.
+// `launcher` marks a command that hands off and exits, so its code means
+// something; a named browser on linux is the browser itself and exits on quit
+function buildOpenBrowserCommand(platform, url, browser) {
   const named = browser && browser !== 'default';
-  if (process.platform === 'darwin') spawn('open', named ? ['-a', browser, url] : [url], { stdio: 'ignore', detached: true }).unref();
-  else if (process.platform === 'win32') spawn('cmd', named ? ['/c', 'start', '', browser, url] : ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
-  else if (named) spawn(browser, [url], { stdio: 'ignore', detached: true }).unref();
-  else spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+  if (platform === 'darwin') return { cmd: 'open', args: named ? ['-a', browser, url] : [url], launcher: true };
+  if (platform === 'win32') return { cmd: 'cmd', args: named ? ['/c', 'start', '', browser, url] : ['/c', 'start', '', url], launcher: true };
+  return named ? { cmd: browser, args: [url], launcher: false } : { cmd: 'xdg-open', args: [url], launcher: true };
+}
+
+// two ways to fail: an opener that isn't installed emits 'error', which kills
+// the server we just started if unhandled; a browser name that no longer
+// resolves exits non-zero, which used to vanish silently
+function openBrowser(url, browser, launchFn = proc.launchDetached) {
+  const { cmd, args, launcher } = buildOpenBrowserCommand(process.platform, url, browser);
+  const child = launchFn(cmd, args);
+  child.on('error', (err) => console.error(`showmd: could not open ${cmd}: ${err.message}`));
+  if (launcher) child.on('exit', (code) => { if (code) console.error(`showmd: ${cmd} could not open ${url} (exit ${code})`); });
+  child.unref();
+  return child;
 }
 
 const BIND_RETRIES = 20;

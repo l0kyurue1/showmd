@@ -120,17 +120,20 @@ test('picker applet seeds the panel from the request file second line', () => {
 
 test('win32 pick("folder"): FolderBrowserDialog, no Description string', async () => {
   let script;
-  const execFile = (cmd, args, cb) => { script = args[args.length - 1]; cb(null, 'C:\\picked'); };
+  let opts;
+  const execFile = (cmd, args, o, cb) => { script = args[args.length - 1]; opts = o; cb(null, 'C:\\picked'); };
   const picker = createFolderPicker({ platform: 'win32', execFile });
   const result = await picker.pick('folder');
   assert.equal(result, 'C:\\picked');
   assert.match(script, /FolderBrowserDialog/);
   assert.doesNotMatch(script, /Description/);
+  // without this the Start Menu launch flashes a console behind the dialog
+  assert.equal(opts.windowsHide, true);
 });
 
 test('win32 pick("file"): OpenFileDialog with a Markdown filter', async () => {
   let script;
-  const execFile = (cmd, args, cb) => { script = args[args.length - 1]; cb(null, 'C:\\picked.md'); };
+  const execFile = (cmd, args, o, cb) => { script = args[args.length - 1]; cb(null, 'C:\\picked.md'); };
   const picker = createFolderPicker({ platform: 'win32', execFile });
   const result = await picker.pick('file');
   assert.equal(result, 'C:\\picked.md');

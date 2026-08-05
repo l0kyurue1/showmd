@@ -1,6 +1,6 @@
 'use strict';
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const proc = require('./proc.js');
 
 // pure so tests can assert the argv for all three platforms without spawning
 function buildRevealCommand(platform, fullPath) {
@@ -9,13 +9,19 @@ function buildRevealCommand(platform, fullPath) {
   return { cmd: 'xdg-open', args: [path.dirname(fullPath)] };
 }
 
+// explorer.exe exits 1 even when the reveal worked; a missing explorer still
+// reports honestly, that arrives as ENOENT
+function revealErrorIsBenign(platform, err) {
+  return platform === 'win32' && err.code === 1;
+}
+
 // trust boundary: the resolved path never touches a shell — execFile takes
 // an argv array, so nothing in `fullPath` can be interpreted as a shell
 // metacharacter
 function defaultRevealFile(fullPath) {
   const { cmd, args } = buildRevealCommand(process.platform, fullPath);
-  execFile(cmd, args, (err) => {
-    if (err) console.error(`showmd: reveal failed: ${err.message}`);
+  proc.tryRun(cmd, args).then(({ err }) => {
+    if (err && !revealErrorIsBenign(process.platform, err)) console.error(`showmd: reveal failed: ${err.message}`);
   });
 }
 
@@ -30,7 +36,7 @@ function buildOpenInfoCommand(fullPath) {
 // be nudged (no Info.plist to point at, no display, osascript missing)
 function defaultOpenInfoWindow(fullPath) {
   const { cmd, args } = buildOpenInfoCommand(fullPath);
-  return new Promise((resolve) => execFile(cmd, args, (err) => resolve(!err)));
+  return proc.tryRun(cmd, args).then(({ err }) => !err);
 }
 
-module.exports = { buildRevealCommand, defaultRevealFile, buildOpenInfoCommand, defaultOpenInfoWindow };
+module.exports = { buildRevealCommand, revealErrorIsBenign, defaultRevealFile, buildOpenInfoCommand, defaultOpenInfoWindow };

@@ -7,7 +7,7 @@ git-backed save history, and an agent-skills browser (`showmd skills`).
 
 ## Commands
 
-- `npm test` — full suite (CSS guard, unit, integration, e2e, pack guard)
+- `npm test` — full suite (CSS/pack/proc-seam guards, unit, integration, e2e)
 - `npm run test:unit` — fast unit loop only (no server boot), use this while iterating
 - `npm run build` — bundle client editor + vendor assets into `client/dist/`
 - `node bin/cli.js SAMPLE.md --no-open` — run locally
@@ -23,7 +23,7 @@ git-backed save history, and an agent-skills browser (`showmd skills`).
 - `test/` — `test/unit/` (pure functions, no server boot), `test/unit/client/`
   (browser modules), `test/integration/` (HTTP server tests), `test/e2e/`
   (spawns the real CLI: smoke, CLI flags, skills mode), `test/lint/`
-  (CSS guard, pack guard)
+  (CSS guard, pack guard, proc-seam guard)
 - `CONTEXT.md` — architecture notes; `CONTRIBUTING.md` — dev setup and CSS rules
 
 ## Conventions

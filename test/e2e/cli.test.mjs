@@ -307,3 +307,25 @@ test('bare `showmd` (no args) in a tmp dir still serves that dir', async () => {
     rmSync(cwdDir, { recursive: true, force: true });
   }
 });
+
+test('a browser that is not installed does not take the server down', async () => {
+  // the one test that boots without --no-open: an unspawnable opener used to
+  // emit an unhandled 'error' and kill the server that just started
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-browser-')));
+  let p = null;
+  try {
+    writeFileSync(path.join(home, 'settings.json'),
+      JSON.stringify({ updateCheck: false, browser: 'showmd-no-such-browser' }));
+    p = spawnCliArgs([filePath], { env: { ...process.env, SHOWMD_SETTINGS_HOME: home } });
+    const info = await waitFor(() => extractUrl(p.state.stdout));
+
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(p.child.exitCode, null, `server exited: ${p.state.stderr}`);
+    const res = await fetch(`http://127.0.0.1:${info.port}/api/root`);
+    assert.equal(res.status, 200, 'still serving after the failed browser launch');
+    console.log('criterion PASS: unspawnable browser is survivable');
+  } finally {
+    if (p) await killAndWait(p.child);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
