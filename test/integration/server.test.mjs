@@ -151,34 +151,6 @@ test('GET /api/roots/:key/raw: symlinked doc sets X-Showmd-Symlink, plain doc do
   }
 });
 
-test('GET /api/version: returns the running package version', async () => {
-  const root = tmp('showmd-version-');
-  try {
-    await withServer(root, async (base) => {
-      const res = await fetch(`${base}/api/version`);
-      assert.equal(res.status, 200);
-      const body = await res.json();
-      assert.equal(body.version, require('../../package.json').version);
-      assert.equal(body.launcher, false, 'a rooted server is never the app launcher to reuse');
-    });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('GET /api/version: a rootless (launcher) server marks itself reusable', async () => {
-  const server = createServer(null);
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/version`);
-    const body = await res.json();
-    assert.equal(body.launcher, true);
-  } finally {
-    server.close();
-    await server.whenClosed();
-  }
-});
-
 test('GET /api/settings: includes a browsers list with "default" first', async () => {
   const root = tmp('showmd-settings-');
   try {

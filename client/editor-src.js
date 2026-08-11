@@ -235,6 +235,7 @@ function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks }) {
     toggleQuote: () => toggleLinePrefix(view, '> ', /^> /),
     undo: () => { histUndo(view); view.focus(); },
     redo: () => { histRedo(view); view.focus(); },
+    destroy: () => view.destroy(),
     insertLink: () => insertLink(view),
     jumpToLine: (n) => {
       const line = view.state.doc.line(Math.max(1, Math.min(n, view.state.doc.lines)));

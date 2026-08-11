@@ -6,9 +6,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 
 const require = createRequire(import.meta.url);
 const { createServer } = require('../../server/server.js');
+const { probeVersion } = require('../../server/registry.js');
 
 function tmp(prefix) {
   return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
@@ -38,6 +40,27 @@ function waitFor(predicate, timeoutMs = 5000) {
   });
 }
 
+async function withProbeServer(body, fn) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await fn(server.address().port);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function closedLocalPort() {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
 // a real, separately-pidded process answering /api/version: entries in
 // ports.js's registry are named by pid, and ports.js sweeps any pid that
 // isn't alive, so a synthetic in-process fake would race the requesting
@@ -59,6 +82,25 @@ function spawnFakeCandidate(body) {
 function writeRegistryEntry(dir, pid, port) {
   writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify({ port, pid }));
 }
+
+test('probeVersion: trusts a JSON body with a string version without applying registry compatibility filters', async () => {
+  await withProbeServer({ version: '0.0.0-old', launcher: true }, async (port) => {
+    assert.deepEqual(await probeVersion(port), { version: '0.0.0-old', launcher: true });
+  });
+});
+
+test('probeVersion: a closed local port resolves null instead of throwing', async () => {
+  assert.equal(await probeVersion(await closedLocalPort()), null);
+});
+
+test('probeVersion: malformed JSON and a version-less body both resolve null', async () => {
+  await withProbeServer('not json', async (port) => {
+    assert.equal(await probeVersion(port), null);
+  });
+  await withProbeServer({ not: 'showmd' }, async (port) => {
+    assert.equal(await probeVersion(port), null);
+  });
+});
 
 test('GET /api/registry: orders entries by the canonical rule regardless of directory write order', async () => {
   const home = tmp('showmd-registry-home-');

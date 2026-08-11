@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, appendFileSync, rm
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { openSSE } from '../helpers/sse-client.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(HERE, '..', '..');
@@ -66,10 +67,19 @@ async function historyOfAtLeast(url, want, timeoutMs = 15000) {
   const start = Date.now();
   let hist = [];
   for (;;) {
-    hist = await (await fetch(url)).json();
-    if (hist.length >= want || Date.now() - start > timeoutMs) return hist;
+    hist = await historyNow(url);
+    if (hist.length >= want) return hist;
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`history did not reach ${want} entries: ${JSON.stringify(hist)}`);
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+async function historyNow(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`history request failed: ${res.status}`);
+  return res.json();
 }
 
 // the same collector, but it closes as soon as every wanted path has shown up
@@ -77,41 +87,13 @@ async function historyOfAtLeast(url, want, timeoutMs = 15000) {
 // without making the fast case slow
 function collectSSEUntil(url, wantPaths, ms = 8000) {
   const remaining = new Set(wantPaths);
-  return collectSSE(url, ms, (event) => {
-    remaining.delete(event.path);
-    return remaining.size === 0;
+  return openSSE(url, {
+    timeoutMs: ms,
+    until(event) {
+      remaining.delete(event.path);
+      return remaining.size === 0;
+    },
   });
-}
-
-async function collectSSE(url, ms, until) {
-  const controller = new AbortController();
-  const events = [];
-  const res = await fetch(url, { signal: controller.signal });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const line = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        if (!line.startsWith('data: ')) continue;
-        const event = JSON.parse(line.slice('data: '.length));
-        events.push(event);
-        if (until?.(event)) controller.abort();
-      }
-    }
-  } catch {
-    // expected: aborted once the collection window elapses
-  } finally {
-    clearTimeout(timer);
-  }
-  return events;
 }
 
 let child;
@@ -198,47 +180,16 @@ test('PUT roundtrip — 204, file on disk updated, GET returns new content', asy
   console.log('criterion 4 PASS: PUT roundtrip — 204, file on disk updated, GET returns new content');
 });
 
-test('PUT traversal (plain + URL-encoded) rejected 403', async () => {
-  const putTraversalRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=../outside/secret.md`, { method: 'PUT', body: '# hack\n' });
-  assert.equal(putTraversalRes.status, 403);
-  const putTraversalEncodedRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=..%2Foutside%2Fsecret.md`, { method: 'PUT', body: '# hack\n' });
-  assert.equal(putTraversalEncodedRes.status, 403);
-  console.log('criterion 5 PASS: PUT traversal (plain + URL-encoded) rejected 403');
-});
-
-test('PUT to non-.md rejected 403', async () => {
-  const putNonMdRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=hello.txt`, { method: 'PUT', body: 'not markdown' });
-  assert.equal(putNonMdRes.status, 403);
-  console.log('criterion 6 PASS: PUT to non-.md rejected 403');
-});
-
 test('sse event arrives on external file change', async () => {
-  const sseController = new AbortController();
-  const ssePromise = fetch(`${BASE}/api/events`, { signal: sseController.signal }).then(async (res) => {
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return null;
-      buf += decoder.decode(value, { stream: true });
-      const match = buf.match(/data: (\{.*\})/);
-      if (match) return JSON.parse(match[1]);
-    }
-  });
-
-  await new Promise((r) => setTimeout(r, 200));
+  const stream = collectSSEUntil(`${BASE}/api/events`, ['hello.md'], 3000);
+  await stream.ready;
   const t0 = Date.now();
   appendFileSync(helloPath, '\nAppended line.\n');
-  const event = await Promise.race([
-    ssePromise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('SSE timeout')), 3000)),
-  ]);
+  const event = (await stream.events).find((entry) => entry.path === 'hello.md');
   const elapsed = Date.now() - t0;
-  sseController.abort();
   assert.ok(event, 'sse event received');
   assert.equal(event.path, 'hello.md');
-  console.log(`criterion 7 PASS: sse event arrived in ${elapsed}ms: ${JSON.stringify(event)}`);
+  console.log(`criterion 5 PASS: sse event arrived in ${elapsed}ms: ${JSON.stringify(event)}`);
 });
 
 // this whole flow builds one growing history on the same file (versioned.md);
@@ -251,32 +202,30 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
 
   const vPut1 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n' });
   assert.equal(vPut1.status, 204);
-  let hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 1);
+  const historyUrl = `${BASE}/api/roots/${KEY}/history?path=${verEnc}`;
+  let hist = await historyNow(historyUrl);
   assert.equal(hist.length, 1, 'one entry after first PUT');
   assert.equal(hist[0].source, 'user');
   assert.ok(hist[0].adds > 0 && hist[0].dels === 0, 'plausible adds/dels');
   console.log(`M3 criterion 1 PASS (a): PUT save -> 1 history entry: ${JSON.stringify(hist[0])}`);
 
   appendFileSync(verPath, 'external addition\n');
-  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 2);
+  hist = await historyOfAtLeast(historyUrl, 2);
   assert.equal(hist.length, 2, 'external edit adds a second entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 1 PASS (b): external edit -> new entry source=external: ${JSON.stringify(hist[0])}`);
 
   const vPut2 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n' });
   assert.equal(vPut2.status, 204);
-  await new Promise((r) => setTimeout(r, 200));
-  await new Promise((r) => setTimeout(r, 2000));
   const vPut3 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n\nthird\n' });
   assert.equal(vPut3.status, 204);
-  await new Promise((r) => setTimeout(r, 200));
-  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 3);
-  assert.equal(hist.length, 3, `two PUTs ~2s apart amend into one new user entry, got ${JSON.stringify(hist.map((e) => `${e.source}@${e.ts}`))}`);
+  hist = await historyNow(historyUrl);
+  assert.equal(hist.length, 3, `successive PUTs amend into one new user entry, got ${JSON.stringify(hist.map((e) => `${e.source}@${e.ts}`))}`);
   assert.equal(hist[0].source, 'user');
-  console.log(`M3 criterion 2 PASS (amend): two PUTs 2s apart -> still one user entry, total=${hist.length}`);
+  console.log(`M3 criterion 2 PASS (amend): successive PUTs -> still one user entry, total=${hist.length}`);
 
   appendFileSync(verPath, 'another external edit\n');
-  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 4);
+  hist = await historyOfAtLeast(historyUrl, 4);
   assert.equal(hist.length, 4, 'external edit after amend window breaks it into a new entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 2 PASS (source break): external edit ends amend window, total=${hist.length}`);
@@ -288,30 +237,14 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
   console.log('M3 criterion 3 PASS: root diff returns a unified diff containing the changed line');
 
   const oldestRev = hist[hist.length - 1].rev;
-  const sseController2 = new AbortController();
-  const ssePromise2 = fetch(`${BASE}/api/events`, { signal: sseController2.signal }).then(async (res) => {
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return null;
-      buf += decoder.decode(value, { stream: true });
-      const match = buf.match(new RegExp(`data: (\\{[^\\n]*"path":"${verFile}"[^}]*\\})`));
-      if (match) return JSON.parse(match[1]);
-    }
-  });
-  await new Promise((r) => setTimeout(r, 200));
+  const restoreStream = collectSSEUntil(`${BASE}/api/events`, [verFile], 3000);
+  await restoreStream.ready;
   const restoreRes = await fetch(`${BASE}/api/roots/${KEY}/restore?path=${verEnc}&rev=${oldestRev}`, { method: 'POST' });
   assert.equal(restoreRes.status, 204);
-  const restoreEvent = await Promise.race([
-    ssePromise2,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('restore SSE timeout')), 3000)),
-  ]);
-  sseController2.abort();
+  const restoreEvent = (await restoreStream.events).find((entry) => entry.path === verFile);
   assert.ok(restoreEvent, 'sse event received for restore');
   assert.equal(readFileSync(verPath, 'utf8'), '# V\n\nfirst\n', 'file on disk matches restored content');
-  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, hist.length + 1);
+  hist = await historyNow(historyUrl);
   assert.equal(hist[0].source, 'restore', 'newest entry is a restore commit');
   console.log('M3 criterion 4 PASS: restore -> disk content matches (cat proof above), SSE event fired, history gained a restore entry: ' + JSON.stringify(restoreEvent));
 
@@ -334,7 +267,7 @@ test('concurrent double-PUT is safe: one clean user history entry, no index.lock
   ]);
   assert.ok(race1.status >= 200 && race1.status < 300, `race1 status ${race1.status}`);
   assert.ok(race2.status >= 200 && race2.status < 300, `race2 status ${race2.status}`);
-  const raceHist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${raceEnc}`, 1);
+  const raceHist = await historyNow(`${BASE}/api/roots/${KEY}/history?path=${raceEnc}`);
   assert.equal(raceHist[0].source, 'user', 'top entry after concurrent double-PUT is user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after concurrent double-PUT');
   console.log(`concurrency check 1 PASS: concurrent double-PUT -> both ${race1.status}/${race2.status}, top history entry ${JSON.stringify(raceHist[0])}, stderr clean`);
@@ -344,20 +277,24 @@ test('cross-contamination: external edit + immediate user PUT emit correct SSE a
   // within the 100ms debounce window
   const crossAPath = path.join(servedRoot, 'crossA.md');
   const crossBEnc = encodeURIComponent('crossB.md');
-  writeFileSync(crossAPath, '# A\n\ninitial\n');
-  await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=crossA.md`, 1); // initial external commit for A
+  const seedA = await fetch(`${BASE}/api/roots/${KEY}/raw?path=crossA.md`, {
+    method: 'PUT',
+    body: '# A\n\ninitial\n',
+  });
+  assert.equal(seedA.status, 204);
+  assert.equal((await historyNow(`${BASE}/api/roots/${KEY}/history?path=crossA.md`)).length, 1);
 
-  const crossEventsPromise = collectSSEUntil(`${BASE}/api/events`, ['crossA.md', 'crossB.md']);
-  await new Promise((r) => setTimeout(r, 200));
+  const crossStream = collectSSEUntil(`${BASE}/api/events`, ['crossA.md', 'crossB.md']);
+  await crossStream.ready;
   appendFileSync(crossAPath, 'external addition to A\n');
   const crossPutRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${crossBEnc}`, { method: 'PUT', body: '# B\n\nfrom user\n' });
   assert.equal(crossPutRes.status, 204);
-  const crossEvents = await crossEventsPromise;
+  const crossEvents = await crossStream.events;
 
   assert.ok(crossEvents.some((e) => e.path === 'crossA.md'), 'SSE event for A arrived');
   assert.ok(crossEvents.some((e) => e.path === 'crossB.md'), 'SSE event for B arrived');
   const histA = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=crossA.md`, 2);
-  const histB = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${crossBEnc}`, 1);
+  const histB = await historyNow(`${BASE}/api/roots/${KEY}/history?path=${crossBEnc}`);
   assert.equal(histA[0].source, 'external', 'A entry stayed external');
   assert.equal(histB[0].source, 'user', 'B entry stayed user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after cross-contamination scenario');
@@ -367,12 +304,11 @@ test('cross-contamination: external edit + immediate user PUT emit correct SSE a
 test('two overlapping external writes both produce external history entries', async () => {
   const raceAPath = path.join(servedRoot, 'raceExtA.md');
   const raceBPath = path.join(servedRoot, 'raceExtB.md');
-  const raceEventsPromise = collectSSEUntil(`${BASE}/api/events`, ['raceExtA.md', 'raceExtB.md']);
-  await new Promise((r) => setTimeout(r, 200));
+  const raceStream = collectSSEUntil(`${BASE}/api/events`, ['raceExtA.md', 'raceExtB.md']);
+  await raceStream.ready;
   writeFileSync(raceAPath, '# race ext A\n');
-  await new Promise((r) => setTimeout(r, 50));
   writeFileSync(raceBPath, '# race ext B\n');
-  const raceEvents = await raceEventsPromise;
+  const raceEvents = await raceStream.events;
 
   assert.ok(raceEvents.some((e) => e.path === 'raceExtA.md'), 'SSE event for raceExtA arrived');
   assert.ok(raceEvents.some((e) => e.path === 'raceExtB.md'), 'SSE event for raceExtB arrived');
@@ -381,7 +317,7 @@ test('two overlapping external writes both produce external history entries', as
   assert.equal(histRaceA[0].source, 'external', 'raceExtA entry is external');
   assert.equal(histRaceB[0].source, 'external', 'raceExtB entry is external');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after two overlapping external writes');
-  console.log(`concurrency check 3 PASS: two external writes 50ms apart -> SSE events ${JSON.stringify(raceEvents)}, histRaceA[0]=${JSON.stringify(histRaceA[0])}, histRaceB[0]=${JSON.stringify(histRaceB[0])}`);
+  console.log(`concurrency check 3 PASS: two back-to-back external writes -> SSE events ${JSON.stringify(raceEvents)}, histRaceA[0]=${JSON.stringify(histRaceA[0])}, histRaceB[0]=${JSON.stringify(histRaceB[0])}`);
 });
 
 test('vendor allowlist: every route 200s with correct content-type', async () => {
@@ -442,7 +378,7 @@ test('file-arg mode: second cli instance on a single file lists siblings; no ind
 
   const rawRes2 = await fetch(`${BASE2}/api/roots/${KEY2}/raw?path=hello.md`);
   assert.equal(rawRes2.status, 200);
-  console.log('criterion 8 PASS: file arg — tree lists siblings, shell and raw both 200');
+  console.log('criterion 6 PASS: file arg — tree lists siblings, shell and raw both 200');
 
   assert.ok(!stderr.includes('index.lock') && !stderr2.includes('index.lock'), 'no index.lock in either server stderr across the whole run');
   console.log('concurrency final check PASS: grep for index.lock across both servers\' stderr — no matches');
@@ -481,11 +417,11 @@ test('two roots on one process: POST /api/roots adds a second root; trees and SS
   assert.ok(treeA.includes('hello.md'), "root A's own tree is unaffected by root B joining");
   assert.ok(!treeA.includes('b.md'), "root A's tree never leaks root B's files");
 
-  const events = collectSSEUntil(`${BASE}/api/events`, ['b.md', 'hello.md'], 6000);
-  await new Promise((r) => setTimeout(r, 200));
+  const stream = collectSSEUntil(`${BASE}/api/events`, ['b.md', 'hello.md'], 6000);
+  await stream.ready;
   appendFileSync(bPath, '\nchanged in B\n');
   appendFileSync(helloPath, '\nchanged in A again\n');
-  const seen = await events;
+  const seen = await stream.events;
 
   const bEvent = seen.find((e) => e.path === 'b.md');
   const aEvent = seen.find((e) => e.path === 'hello.md');

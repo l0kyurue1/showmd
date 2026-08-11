@@ -76,30 +76,25 @@ test('cross-origin GET is not blocked', async () => {
   });
 });
 
-test('POST /api/prune: cross-origin request is rejected 403 (Origin guard)', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/prune`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
-    assert.equal(res.status, 403);
-  });
-});
+test('cross-origin requests are rejected across privileged write routes without mutating roots', async () => {
+  await withServer(async (base, key) => {
+    const requests = [
+      ['POST /api/prune', '/api/prune', 'POST'],
+      ['POST /api/install-app', '/api/install-app', 'POST'],
+      ['POST /api/restart', '/api/restart', 'POST'],
+      ['POST /api/shutdown', '/api/shutdown', 'POST'],
+      ['DELETE /api/roots/:key', `/api/roots/${key}`, 'DELETE'],
+    ];
 
-test('POST /api/install-app: cross-origin request is rejected 403 (Origin guard)', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/install-app`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
-    assert.equal(res.status, 403);
-  });
-});
+    for (const [name, route, method] of requests) {
+      const res = await fetch(`${base}${route}`, {
+        method,
+        headers: { Origin: 'http://evil.example' },
+      });
+      assert.equal(res.status, 403, name);
+    }
 
-test('POST /api/restart: cross-origin request is rejected 403 (Origin guard)', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/restart`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
-    assert.equal(res.status, 403);
-  });
-});
-
-test('POST /api/shutdown: cross-origin request is rejected 403 (Origin guard)', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/shutdown`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
-    assert.equal(res.status, 403);
+    const list = await (await fetch(`${base}/api/roots`)).json();
+    assert.deepEqual(list.roots.map((root) => root.key), [key], 'rejected DELETE must not remove the root');
   });
 });

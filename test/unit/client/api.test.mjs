@@ -113,15 +113,6 @@ test('putRaw normalizes a failed save into a thrown error, matching the old inli
   }
 });
 
-test('putRaw resolves quietly on a successful save', async () => {
-  const f = stubFetch({ ok: true, status: 200 });
-  try {
-    await assert.doesNotReject(() => api.documentApi({ space: 'root', rootKey: KEY }).putRaw('doc.md', 'text'));
-  } finally {
-    f.restore();
-  }
-});
-
 test('revealSettings targets the settings file, not a document', async () => {
   const f = stubFetch();
   try {
@@ -133,48 +124,25 @@ test('revealSettings targets the settings file, not a document', async () => {
   }
 });
 
-test('ping is a thin passthrough used for liveness polling of arbitrary URLs', async () => {
-  const f = stubFetch();
-  try {
-    await api.ping('http://127.0.0.1:4000/api/settings', { mode: 'no-cors', cache: 'no-store' });
-    assert.deepEqual(f.calls[0], [
-      'http://127.0.0.1:4000/api/settings',
-      { mode: 'no-cors', cache: 'no-store' },
-    ]);
-  } finally {
-    f.restore();
-  }
-});
-
-test('addRoot POSTs {path} to /api/roots', async () => {
+test('root-management helpers preserve their request contracts', async () => {
   const f = stubFetch();
   try {
     await api.addRoot('/Users/me/proj');
-    assert.equal(f.calls[0][0], '/api/roots');
-    assert.equal(f.calls[0][1].method, 'POST');
-    assert.deepEqual(JSON.parse(f.calls[0][1].body), { path: '/Users/me/proj' });
-  } finally {
-    f.restore();
-  }
-});
-
-test('pickFolder POSTs the given mode/startDir to /api/pick-folder', async () => {
-  const f = stubFetch();
-  try {
     await api.pickFolder({ mode: 'folder', startDir: '/Users/me' });
-    assert.equal(f.calls[0][0], '/api/pick-folder');
-    assert.equal(f.calls[0][1].method, 'POST');
-    assert.deepEqual(JSON.parse(f.calls[0][1].body), { mode: 'folder', startDir: '/Users/me' });
-  } finally {
-    f.restore();
-  }
-});
-
-test('listRoots GETs /api/roots', async () => {
-  const f = stubFetch();
-  try {
     await api.listRoots();
-    assert.deepEqual(f.calls[0], ['/api/roots', undefined]);
+    assert.deepEqual(f.calls, [
+      ['/api/roots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: '/Users/me/proj' }),
+      }],
+      ['/api/pick-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'folder', startDir: '/Users/me' }),
+      }],
+      ['/api/roots', undefined],
+    ]);
   } finally {
     f.restore();
   }

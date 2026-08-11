@@ -54,17 +54,6 @@ class HRWidget extends WidgetType {
   }
 }
 
-class LangWidget extends WidgetType {
-  constructor(lang) { super(); this.lang = lang; }
-  eq(other) { return other.lang === this.lang; }
-  toDOM() {
-    const s = document.createElement('span');
-    s.className = 'cm-lp-lang';
-    s.textContent = this.lang;
-    return s;
-  }
-}
-
 class MdBlockWidget extends WidgetType {
   constructor(src, gap) { super(); this.src = src; this.gap = gap; }
   eq(other) { return other.src === this.src && other.gap === this.gap; }
@@ -388,17 +377,10 @@ function buildEditDecos(view) {
             }
             break;
           case 'FencedCode': {
-            const revealed = onActiveLine(node.from, node.to);
-            const infoNode = node.node.getChild('CodeInfo');
-            const lang = infoNode ? doc.sliceString(infoNode.from, infoNode.to).trim() : '';
             const first = doc.lineAt(node.from);
             const last = doc.lineAt(node.to);
             for (let n = first.number; n <= last.number; n++) {
               decos.push(Decoration.line({ class: 'cm-lp-code' }).range(doc.line(n).from));
-            }
-            if (!revealed) {
-              decos.push(Decoration.replace({ widget: new LangWidget(lang) }).range(first.from, first.to));
-              if (/^(`{3,}|~{3,})\s*$/.test(last.text)) decos.push(Decoration.replace({}).range(last.from, last.to));
             }
             return false;
           }
@@ -426,11 +408,4 @@ export {
   scanMark,
   scanBlockMath,
   frontmatterEnd,
-  BulletWidget,
-  TaskWidget,
-  HRWidget,
-  LangWidget,
-  MdBlockWidget,
-  MathWidget,
-  MermaidWidget,
 };

@@ -145,6 +145,31 @@ async function waitFor(cond, { timeout = 4000, interval = 5 } = {}) {
 }
 
 let bootCount = 0;
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+
+function createTimerControl(deferredDelays) {
+  const delays = new Set(deferredDelays);
+  const pending = new Map();
+  let nextId = 0;
+  const setTimeoutControlled = (fn, delay = 0, ...args) => {
+    if (!delays.has(delay)) return nativeSetTimeout(fn, delay, ...args);
+    const id = { deferredTimer: ++nextId };
+    pending.set(id, { fn, delay, args });
+    return id;
+  };
+  const clearTimeoutControlled = (id) => {
+    if (!pending.delete(id)) nativeClearTimeout(id);
+  };
+  const run = async (delay) => {
+    const selected = [...pending].filter(([, timer]) => delay === undefined || timer.delay === delay);
+    for (const [id] of selected) pending.delete(id);
+    await Promise.all(selected.map(([, timer]) => timer.fn(...timer.args)));
+    return selected.length;
+  };
+  const count = (delay) => [...pending.values()].filter((timer) => delay === undefined || timer.delay === delay).length;
+  return { setTimeoutControlled, clearTimeoutControlled, run, count };
+}
 
 // Boots the real client/index.html + client/app.js under jsdom: same markup
 // and module the browser loads, with fetch/EventSource/matchMedia faked and
@@ -155,6 +180,7 @@ export async function bootApp({
   tree = [], root = null, settings = {}, settingsResponse = null, files = {}, rawOverrides = {},
   userAgent, systemDark = false, localStorageSeed = {},
   route, roots, routeError, skillsTree = null, skillFiles = {}, agentTree = null, agentFiles = {},
+  deferredTimeouts = [],
 } = {}) {
   bootCount += 1;
   // legacy `root:` callers get a synthesized Root Space route/summary under a
@@ -224,6 +250,7 @@ export async function bootApp({
 
   const EventSourceFake = createFakeEventSource();
   const matchMediaFake = createFakeMatchMedia();
+  const timerControl = createTimerControl(deferredTimeouts);
   if (systemDark) matchMediaFake('(prefers-color-scheme: dark)').matches = true;
 
   window.fetch = fetchFake;
@@ -257,6 +284,8 @@ export async function bootApp({
   defineGlobal('KeyboardEvent', window.KeyboardEvent);
   defineGlobal('MouseEvent', window.MouseEvent);
   defineGlobal('URLSearchParams', window.URLSearchParams);
+  defineGlobal('setTimeout', timerControl.setTimeoutControlled);
+  defineGlobal('clearTimeout', timerControl.clearTimeoutControlled);
 
   await import(APP_JS_URL + '?boot=' + bootCount);
   await waitFor(() => EventSourceFake.instances.length > 0);
@@ -269,6 +298,8 @@ export async function bootApp({
     EventSource: EventSourceFake,
     matchMedia: matchMediaFake,
     errors,
+    runDeferredTimers: timerControl.run,
+    pendingDeferredTimers: timerControl.count,
     keydown(key, mods = {}) {
       window.document.dispatchEvent(new window.KeyboardEvent('keydown', {
         key, bubbles: true, cancelable: true, metaKey: false, ctrlKey: false, shiftKey: false, ...mods,
