@@ -3,11 +3,8 @@
 
 export const MODE_CYCLE = { read: 'edit', edit: 'source', source: 'read' };
 
-// overlay is one slot, not a boolean per screen: Settings and Home both cover
-// whatever is showing and only ever one at a time, so the pair that used to be
-// able to set each other is now unrepresentable.
-// source names which tree the sidebar lists, and is orthogonal to the pane —
-// the skills tree with Settings open is a reachable state.
+// One overlay slot prevents Settings and Home from stacking.
+// Sidebar source remains independent, so overlays preserve its tree.
 export const INITIAL_VIEW = { mode: 'read', version: null, overlay: null, source: 'files' };
 
 export function nextView(view, event) {
@@ -19,14 +16,10 @@ export function nextView(view, event) {
     // rev vs. showmd's own history is a fact about that rev, not the session
     case 'version': return { ...view, version: { rev: event.rev, repo: !!event.repo }, overlay: null };
     case 'current': return view.version === null ? view : { ...view, version: null, overlay: null };
-    // Settings overlays whatever is showing, like the Version View overlays a
-    // mode: mode and version are left untouched underneath, so closing it
-    // restores exactly what was there before.
+    // Settings preserves the mode and version beneath its overlay.
     case 'settings-open': return view.overlay === 'settings' ? view : { ...view, overlay: 'settings' };
     case 'settings-close': return view.overlay === 'settings' ? { ...view, overlay: null } : view;
-    // Home covers everything, Settings included: it is the one screen that is
-    // not "about" the open file. One slot means opening it closes Settings
-    // rather than stacking on it, which is what every caller already does.
+    // Home replaces any existing overlay instead of stacking.
     case 'launcher-open': return view.overlay === 'launcher' ? view : { ...view, overlay: 'launcher' };
     case 'launcher-close': return view.overlay === 'launcher' ? { ...view, overlay: null } : view;
     case 'source': return view.source === event.source ? view : { ...view, source: event.source };
@@ -56,20 +49,13 @@ export function isVersionOpen(view) {
   return view.version !== null;
 }
 
-// the view's serialization format, never an input to it: a hash survives reload
-// without needing a server route, and leaves the file in the pathname for the
-// view to fall back to on close
-// Home and Settings have their own pathnames (set via navigateTo) and need no
-// hash token: only Skills/Agents still reload through an overlay hash.
+// Hashes persist Skills/Agents across reloads; Home and Settings use paths.
 export function hashFor(view) {
   if (view.source !== 'files') return `#${view.source}`;
   return '';
 }
 
-// the single writer of the View State: every transition is a dispatch, and a
-// dispatch that changes the record always commits it to these panes in the
-// same call — the two can no longer drift apart, which was the bug class this
-// module replaces (a setter with no forced follow-up commit).
+// Dispatch is the single writer for both the view record and visible panes.
 export function createViewState({ panes, toolbar, sourceBtn, editBtn, readBtn, settingsFooterBtn, skillsFooterBtn, agentsFooterBtn }) {
   let view = INITIAL_VIEW;
 
@@ -87,11 +73,8 @@ export function createViewState({ panes, toolbar, sourceBtn, editBtn, readBtn, s
     history.replaceState(history.state, '', location.pathname + location.search + hashFor(view));
   }
 
-  // beforeCommit lets a caller finish preparing what the new pane will show
-  // (e.g. loading a diff body) before it becomes visible: the record updates
-  // first, then beforeCommit runs, then commit() always runs after — a caller
-  // can prepare content but can never skip the commit. Only a beforeCommit
-  // call makes dispatch return a promise; every other dispatch stays sync.
+  // beforeCommit prepares async pane content before the mandatory commit.
+  // Dispatch stays synchronous when no hook is supplied.
   function dispatch(event, { beforeCommit } = {}) {
     const next = nextView(view, event);
     if (next === view) return view;

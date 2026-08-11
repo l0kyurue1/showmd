@@ -48,9 +48,7 @@ function formatPortWarning(port, version, pid) {
   return `showmd: port ${port} is held by showmd ${version}${pid ? ` (pid ${pid})` : ''}`;
 }
 
-// a short GET, not the full /api/settings probe: cheap enough to run on every
-// silent port fallback. Answering at all is what proves a process is ours —
-// the launcher scripts used to reimplement it in AppleScript/PowerShell/sh
+// Probe the cheap version endpoint to identify showmd during port fallback.
 function probeShowmd(port, { timeout = 300 } = {}) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/version', timeout }, (res) => {
@@ -70,10 +68,7 @@ function probeShowmd(port, { timeout = 300 } = {}) {
   });
 }
 
-// server/registry.js probes the Registry and applies server/protocol.js's
-// orderRegistry; this is the same discovery a live server answers at
-// GET /api/registry, just run in-process since bin/cli.js already needs it
-// before any server may exist yet to ask (the bootstrap case).
+// Discover the highest-priority live registry entry during bootstrap.
 async function discoverPrimary(configuredPort) {
   const entries = await discoverRegistry({ configuredPort });
   return entries[0] || null;
@@ -102,12 +97,7 @@ function postAddRoot(port, targetPath) {
   });
 }
 
-// the only path that boots no server of its own: a live shared server took
-// the target and printed its own URL, so the caller exits without listen()ing.
-// A dead/unreachable candidate falls back to booting our own shared server; an
-// ancestor_conflict (409) is distinguished so the caller falls back to a
-// dedicated boot instead (the plan's ancestor-overlap fallback), not another
-// shared server racing for the same registry slot.
+// Hand the target to a shared server; a conflict requires a dedicated boot.
 async function attemptReuse(target, configuredPort, args, browser) {
   const found = await discoverPrimary(configuredPort);
   if (!found) return { handled: false, conflict: false };
@@ -133,9 +123,7 @@ function parseNetstatPid(output, port) {
   return null;
 }
 
-// more than a nicety for the warning line: takeover of a stale showmd below
-// refuses to kill anything it cannot identify, so no pid means an outdated
-// install keeps the port forever. Windows has no lsof, hence the netstat arm
+// Stale takeover needs a PID; Windows uses netstat because it lacks lsof.
 function findPidOnPort(port) {
   try {
     if (process.platform === 'win32') {
@@ -149,12 +137,7 @@ function findPidOnPort(port) {
   }
 }
 
-// resolution detail for buildOpenBrowserCommand below: the settings picker
-// (server/settings-platform.js's detectBrowsersDarwin) produces these exact
-// .app display names. `open -a <name>` breaks if the app is renamed or the
-// display name is localized; a bundle id survives both, so known names use
-// `open -b` instead. Unrecognized names (including anything hand-typed) fall
-// through to the old `-a`/exe-name behavior, which still works for them.
+// Stable IDs avoid localized app names and untrusted commands.
 const BROWSER_IDS = {
   'Google Chrome': { darwin: 'com.google.Chrome', win32: 'chrome.exe' },
   Safari: { darwin: 'com.apple.Safari' },
@@ -163,6 +146,20 @@ const BROWSER_IDS = {
   Arc: { darwin: 'company.thebrowser.Browser' },
   'Brave Browser': { darwin: 'com.brave.Browser', win32: 'brave.exe' },
 };
+
+// Only detected browser executables may be spawned directly.
+function linuxBrowserCommand(browser) {
+  switch (browser) {
+    case 'firefox': return 'firefox';
+    case 'google-chrome': return 'google-chrome';
+    case 'google-chrome-stable': return 'google-chrome-stable';
+    case 'chromium': return 'chromium';
+    case 'chromium-browser': return 'chromium-browser';
+    case 'brave-browser': return 'brave-browser';
+    case 'microsoft-edge': return 'microsoft-edge';
+    default: return null;
+  }
+}
 
 module.exports = {
   resolveSkillsMode, formatPortWarning, probeShowmd, findPidOnPort, parseNetstatPid,
@@ -195,9 +192,7 @@ Options:
   if (argv.includes('--version') || argv.includes('-v')) { console.log(VERSION); return; }
 }
 
-// pure so tests can assert the argv for all three platforms without spawning.
-// `launcher` marks a command that hands off and exits, so its code means
-// something; a named browser on linux is the browser itself and exits on quit
+// Build platform argv without spawning; launcher marks handoff commands.
 function buildOpenBrowserCommand(platform, url, browser) {
   const named = browser && browser !== 'default';
   const known = named ? BROWSER_IDS[browser] : null;
@@ -206,15 +201,16 @@ function buildOpenBrowserCommand(platform, url, browser) {
     return { cmd: 'open', args: named ? ['-a', browser, url] : [url], launcher: true };
   }
   if (platform === 'win32') {
-    if (known && known.win32) return { cmd: 'cmd', args: ['/c', 'start', '', known.win32, url], launcher: true };
-    return { cmd: 'cmd', args: named ? ['/c', 'start', '', browser, url] : ['/c', 'start', '', url], launcher: true };
+    if (known && known.win32) return { cmd: known.win32, args: [url], launcher: false };
+    return { cmd: 'explorer.exe', args: [url], launcher: true };
   }
-  return named ? { cmd: browser, args: [url], launcher: false } : { cmd: 'xdg-open', args: [url], launcher: true };
+  const linuxCommand = named ? linuxBrowserCommand(browser) : null;
+  return linuxCommand
+    ? { cmd: linuxCommand, args: [url], launcher: false }
+    : { cmd: 'xdg-open', args: [url], launcher: true };
 }
 
-// two ways to fail: an opener that isn't installed emits 'error', which kills
-// the server we just started if unhandled; a browser name that no longer
-// resolves exits non-zero, which used to vanish silently
+// Report missing openers and non-zero launcher exits without stopping the server.
 function openBrowser(url, browser, launchFn = proc.launchDetached) {
   const { cmd, args, launcher } = buildOpenBrowserCommand(process.platform, url, browser);
   const child = launchFn(cmd, args);
@@ -229,7 +225,8 @@ const BIND_RETRY_MS = 100;
 // trust boundary: every listen() below binds 127.0.0.1, never 0.0.0.0 — the
 // served file tree must not reach the network
 function serve(server, args, urlPath, describe, browser, { reuseTarget, configuredPort } = {}) {
-  function onListening() {
+  async function onListening() {
+    await server.whenAnnounced?.();
     const actualPort = server.address().port;
     const url = `http://127.0.0.1:${actualPort}/${urlPath}`;
     console.log(describe());
@@ -246,12 +243,7 @@ function serve(server, args, urlPath, describe, browser, { reuseTarget, configur
   }
   let retries = 0;
   let stalePortTaken = false;
-  // a restarting server's replacement can start before the old process has
-  // fully released the port, so a same-port EADDRINUSE retries before giving up
-  // legacy takeover path: probes the exact colliding port for an outdated,
-  // unregistered showmd (never went through the Registry) and reclaims it;
-  // preserved as the fallback once a registry-based reuse attempt (below)
-  // finds no live compatible shared server to hand the target to
+  // Retry restarts, then reclaim an outdated server or use a free port.
   function afterBindCollision() {
     if (args.portExplicit) {
       console.error(`showmd: port ${args.port} is already in use`);
@@ -259,10 +251,7 @@ function serve(server, args, urlPath, describe, browser, { reuseTarget, configur
     }
     probeShowmd(args.port).then((live) => {
       const pid = live ? findPidOnPort(args.port) : null;
-      // yielding the default port to an outdated showmd is what leaves a
-      // browser tab talking to an old client and old API forever; take the
-      // port instead. Only a process that answered /api/version is killed,
-      // and only once — a kill that doesn't free the port falls through
+      // Reclaim only a process that answered /api/version, and only once.
       if (live && pid && live.version !== VERSION && !stalePortTaken) {
         stalePortTaken = true;
         retries = 0;
@@ -285,9 +274,7 @@ function serve(server, args, urlPath, describe, browser, { reuseTarget, configur
       setTimeout(() => server.listen(args.port, '127.0.0.1'), BIND_RETRY_MS);
       return;
     }
-    // concurrent cold-start race (CLI and concurrent start, step 7): someone
-    // else won the bind since our own discovery probe came up empty. Re-probe
-    // and hand the target to the winner instead of taking over its port.
+    // A cold-start loser re-probes and hands its target to the bind winner.
     if (reuseTarget) {
       attemptReuse(reuseTarget, configuredPort, args, browser).then(({ handled }) => {
         if (handled) { process.exit(0); return; }
@@ -388,11 +375,7 @@ if (process.argv[2] === 'agents') {
   const { args, rest } = parseArgs(process.argv.slice(2), stored.port);
 
   if (args.launcher) {
-    // every app launch runs this, so reuse lives here rather than in each
-    // platform's launcher script: the Registry's first entry gets its tab
-    // opened, whether it is a rootless launcher or an already-rooted shared
-    // server (both serve Home at '/'); a stale, unregistered showmd on the
-    // configured port is still killed by serve()'s takeover below
+    // App launches reuse the first compatible registry entry.
     const found = args.portExplicit ? null : await discoverPrimary(args.port);
     if (found && found.capabilities.includes(CAPABILITIES.ROOTS_V1)) {
       const url = `http://127.0.0.1:${found.actualPort}/`;
@@ -416,23 +399,16 @@ if (process.argv[2] === 'agents') {
 
   const { dir: root, doc } = classified;
 
-  // CLI and concurrent start, steps 1-5: asking for nothing dedicated means
-  // this invocation is a capability client first, a server second. --port,
-  // --new/--dedicated, and an ancestor-overlap 409 below all skip straight to
-  // booting our own (mode: dedicated) process instead.
+  // Shared CLI invocations reuse a compatible server when possible.
   let wantsDedicated = args.portExplicit || args.dedicated;
   if (!wantsDedicated) {
     const reused = await attemptReuse(target, args.port, args, stored.browser);
     if (reused.handled) return;
-    // an ancestor overlap is a real conflict with a live shared server's root,
-    // not an absent one: booting another shared server here would just race
-    // the same registry slot, so this invocation becomes dedicated instead
+    // Ancestor overlap cannot share a registry slot, so boot dedicated.
     if (reused.conflict) wantsDedicated = true;
   }
 
-  // Root Space is addressed by key, not by the boot-time path (conflict #23):
-  // keyFor is a deterministic hash of the realpath, so the URL can be composed
-  // before the RootManager finishes registering the same root under it.
+  // The deterministic root key lets us compose the URL before registration.
   const { key } = await identifyRoot(root);
   const routeContext = { space: 'root', rootKey: key, ...(doc ? { documentPath: doc } : {}) };
   const urlPath = formatRouteContext(routeContext).replace(/^\//, '');

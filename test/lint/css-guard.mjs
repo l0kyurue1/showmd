@@ -25,9 +25,7 @@ function scan(file, { skipRoot = false } = {}) {
 scan('client/app.css', { skipRoot: true });
 scan('client/index.html');
 
-// theme-lab.js is a deliberate exclusion: the dev-only palette workbench, raw
-// values by design (see its header comment and docs/design.md's Theme Lab
-// section). Non-recursive so client/dist/ and client/vendor/ are never scanned.
+// Exclude the raw-value Theme Lab and generated/vendor subdirectories.
 const CLIENT_EXCLUDE = new Set(['theme-lab.js']);
 for (const name of readdirSync(path.join(ROOT, 'client')).sort()) {
   if (name.endsWith('.js') && !CLIENT_EXCLUDE.has(name)) scan(`client/${name}`);
@@ -70,9 +68,7 @@ for (const token of [...SHARED_GEOMETRY, ...DERIVED_GEOMETRY]) {
   }
 }
 
-// tokens the CSS philosophy (CONTRIBUTING.md) exempts from light-dark() because
-// they're deliberately identical in both themes; kept here, not in prose, so
-// the exemption is enforced both ways and can't rot into a stale allowlist
+// Enforce the tokens deliberately identical across both themes.
 const THEME_INVARIANT = new Set(['--white', '--tooltip-bg', '--tooltip-kbd-bg', '--shadow-1', '--shadow-2', '--shadow-3']);
 const LIGHT_DARK_RE = /^light-dark\(/i;
 const COLOR_VALUE_RE = /^#[0-9a-fA-F]{3,8}$|^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i;

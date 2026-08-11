@@ -41,11 +41,7 @@ function installFnFor(platform) {
   return { darwin: installers.installApp, win32: installers.installAppWin, linux: installers.installAppLinux }[platform] || null;
 }
 
-// restart means "come back up on the saved settings" — a stale --port on the
-// inherited argv would otherwise outrank the new port on the next boot
-// (bin/cli.js gives an explicit --port priority over stored settings), so it
-// has to be stripped rather than carried forward. --no-open is forced because
-// the browser tab is already open and will reconnect on its own.
+// Restart with saved settings, not an inherited --port, and reuse the open tab.
 function restartArgv(argv) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
@@ -95,16 +91,12 @@ const ERROR_STATUS = {
   invalid_json: [400, 'invalid json body'],
 };
 
-// launcherBoot marks the shell so app.css/app.js show the launcher from first
-// paint instead of flashing doc chrome (see app.css and init()'s early
-// removal of the second, JS-stripped launcher-boot marker)
+// Mark rootless HTML so the launcher appears on first paint.
 function renderShell(html, boot, { launcherBoot = false } = {}) {
   if (launcherBoot) {
     html = html.replace('<body>', '<body class="launcher launcher-boot">');
   }
-  // explicit light/dark gets stamped on <html> so the very first paint is
-  // the right palette; 'system' needs nothing — :root's light-dark() +
-  // `color-scheme: light dark` already follow the OS pre-JS
+  // Stamp explicit themes for first paint; system mode already follows the OS.
   if (boot.settings.colorMode === 'light' || boot.settings.colorMode === 'dark') {
     html = html.replace('<html lang="en">', `<html lang="en" data-theme="${boot.settings.colorMode}">`);
   }
@@ -162,9 +154,7 @@ function findRoute(routes, method, pathname, url) {
 
 const ROOT_SCOPED_TAILS = new Set(['tree', 'raw', 'asset', 'history', 'diff', 'restore', 'reveal']);
 
-// Splits the still-encoded pathname before decoding each segment, so an
-// encoded '/' inside the key or tail can never be mistaken for a route
-// separator (plan conflict #23).
+// Split before decoding so encoded slashes cannot become route separators.
 function matchRootScopedPath(rawPathname) {
   const parts = rawPathname.split('/');
   if (parts.length !== 5 || parts[0] !== '' || parts[1] !== 'api' || parts[2] !== 'roots') return null;
@@ -228,14 +218,12 @@ const ASSET_MIME = {
   '.ico': 'image/x-icon',
 };
 
-// `root` is a directory string (the boot root), or `null` for launcher mode
-// (no root yet — POST /api/roots adds one). Additional roots added at
-// runtime are owned by RootManager, keyed and scoped independently.
+// A null boot root starts launcher mode; RootManager owns runtime roots.
 function createServer(root, {
   skillsContexts = [], revealFile = defaultRevealFile, openInfoFn = defaultOpenInfoWindow, platform = process.platform, warmPickerOnStart = false,
   installFn, appStatusFn, registerMdFn, restartFn, mdHandlerDefaultFn, folderPickerFactory = createFolderPicker, initialDoc = null,
   cliPath = process.argv[1] || '', selfHealOnBoot = false, selfHealFn, exitFn = process.exit, mode = DEFAULT_MODE,
-  launchDetachedFn = proc.launchDetached,
+  launchDetachedFn = proc.launchDetached, statFn = fsp.stat,
 } = {}) {
   const folderPicker = folderPickerFactory({ platform });
   if (warmPickerOnStart && platform === 'darwin') folderPicker.warm();
@@ -273,8 +261,7 @@ function createServer(root, {
   async function handleRootVanished(root) {
     const result = await rootManager.remove(root.key).catch(() => ({ removed: false }));
     if (result.removed) broadcastSSE(sseClients, { rootKey: root.key, path: null, event: 'root-removed' });
-    await recentsWrite;
-    await recents.remove(root.dir);
+    await removeRecent(root.dir);
   }
 
   // stale handoffs (crashed restart, abandoned temp file) never get their own
@@ -318,12 +305,15 @@ function createServer(root, {
   // requests — both end the process, so a second call is a no-op, not an error
   let stopping = false;
 
-  // serializes recents.js writes and gives GET /api/recents something to
-  // await, so a request landing right after boot never reads a stale list
-  // while that write is still in flight
+  // Serialize Recents writes so reads never overtake boot recording.
   let recentsWrite = Promise.resolve();
   function recordRecent(p) {
     recentsWrite = recentsWrite.then(() => recents.add(p)).catch(() => {});
+    return recentsWrite;
+  }
+
+  function removeRecent(p) {
+    recentsWrite = recentsWrite.then(() => recents.remove(p)).catch(() => {});
     return recentsWrite;
   }
 
@@ -333,9 +323,9 @@ function createServer(root, {
     for (const entry of await recents.list()) {
       let st;
       try {
-        st = await fsp.stat(entry.path);
+        st = await statFn(entry.path);
       } catch (err) {
-        if (err.code === 'ENOENT') { await recents.remove(entry.path); continue; }
+        if (err.code === 'ENOENT') { await removeRecent(entry.path); continue; }
         entries.push({ path: entry.path, ts: entry.ts, kind: isMarkdownFile(entry.path) ? 'file' : 'folder' });
         continue;
       }
@@ -344,19 +334,13 @@ function createServer(root, {
     return entries;
   }
 
-  // a real single-root boot (cli path/file open, Helper double-click) is a
-  // recents entry point same as picking one via the launcher — the rootless
-  // launcher boot itself is not
+  // Record real boot targets in Recents, but not the rootless launcher.
   if (roots.length) {
     recordRecent(roots[0].dir);
     if (initialDoc) recordRecent(path.join(roots[0].dir, initialDoc));
   }
 
-  // restarting spawns a detached copy of this same process (node + argv) before
-  // this one exits, so the reload the client triggers lands on a fresh process
-  // with whatever settings were just saved (a new port, say). The current
-  // RootManager roots and SkillsContext keys are handed off through a snapshot
-  // file so the child comes back up with them instead of just the boot argv.
+  // Snapshot roots and Skills contexts for the detached replacement process.
   async function defaultRestart() {
     const argv = restartArgv(process.argv.slice(1));
     const newInstanceId = randomUUID();
@@ -364,7 +348,7 @@ function createServer(root, {
     const metadata = getInstanceMetadata();
     const state = {
       oldInstance: { instanceId: metadata.instanceId, pid: process.pid, startedAt: metadata.startedAt, actualPort: server.address().port },
-      // the child's real pid is unknown until after spawn; adoption matches on instanceId alone, so 1 is a valid placeholder
+      // Adoption matches instanceId, so PID may be a placeholder before spawn.
       newInstance: { instanceId: newInstanceId, pid: 1, startedAt: new Date().toISOString() },
       roots: rootManager.list(),
       skillsContexts: skillsContextRegistry.list(),
@@ -533,9 +517,7 @@ function createServer(root, {
 
   const routes = [
     { method: 'GET', match: (pathname) => pathname === '/api/version', handler: async (ctx) => {
-      // `launcher` is the boot shape, not the current one: a launcher whose
-      // root was picked later stays the app's reuse target, while a server
-      // started as `showmd file.md` never is.
+      // Launcher capability reflects boot shape, even after a root is picked.
       return sendJSON(ctx.res, 200, shapeVersionResponse({
         version: require('../package.json').version,
         launcher: bootedRootless,
@@ -545,9 +527,7 @@ function createServer(root, {
       }));
     } },
 
-    // the ordered Registry: every live server answers identically (same
-    // ports directory, same server/protocol.js rule), so a consumer asks
-    // whichever one it can reach and takes the first entry.
+    // Any live server returns the same ordered registry.
     { method: 'GET', match: (pathname) => pathname === '/api/registry', handler: async (ctx) => {
       const configuredPortParam = ctx.url.searchParams.get('configuredPort');
       const configuredPort = configuredPortParam ? Number(configuredPortParam) : undefined;
@@ -556,10 +536,7 @@ function createServer(root, {
 
     { method: 'GET', match: (pathname) => pathname === '/api/settings', handler: async (ctx) => {
       const { res, url } = ctx;
-      // the settings payload itself carries nothing root-scoped any more, but
-      // an unopen ?root= key still 404s — same contract as before the history
-      // sizes moved to their own endpoint, so a caller that scoped its request
-      // to a since-closed root finds out instead of silently getting home's view
+      // Reject a closed root even though settings are no longer root-scoped.
       const key = url.searchParams.get('root');
       if (key && !rootScopedRootOr404(res, key)) return;
       return sendJSON(res, 200, await getSettingsView({
@@ -567,9 +544,7 @@ function createServer(root, {
       }));
     } },
 
-    // split out of /api/settings: each history size is its own prefix query
-    // over the shadow git store, slow enough that the boot payload can't
-    // wait on it, so the Settings page fetches it separately once open.
+    // Fetch slow history-size queries separately from settings and boot.
     { method: 'GET', match: (pathname) => pathname === '/api/history-size', handler: async (ctx) => {
       const { res, url } = ctx;
       const key = url.searchParams.get('root');
@@ -590,10 +565,7 @@ function createServer(root, {
       return sendJSON(ctx.res, 200, await settings.writeSettings(ctx.body));
     } },
 
-    // destructive: scope 'root' removes one named open root's own shadow
-    // history dir; scope 'all' removes the whole history home. Either way the
-    // target path comes from historyDirFor/pruneAllDir, never from the request
-    // body — the body only names which open root, or selects 'all'.
+    // Derive prune paths internally; the body only selects an open root or all.
     { method: 'POST', match: (pathname) => pathname === '/api/prune', needs: ['body'], handler: async (ctx) => {
       const { res, body } = ctx;
       const scope = body.scope || 'root';
@@ -648,9 +620,7 @@ function createServer(root, {
       sendJSON(ctx.res, 200, { ok: true });
       if (stopping) return;
       stopping = true;
-      // every open tab needs the replacement's port, not just the one that
-      // clicked Restart. restart() is scheduled only once the broadcast is
-      // out, so shutdown can never overtake the notification.
+      // Broadcast the replacement port before scheduling shutdown.
       settings.readSettings()
         .then(({ port }) => {
           broadcastSSE(sseClients, { event: 'server-restarting', port });
@@ -704,9 +674,7 @@ function createServer(root, {
       return sendJSON(res, 200, { path: picked });
     } },
 
-    // a target may be a folder (becomes the root) or a markdown file (its
-    // parent becomes/joins the root, and the response url points at the
-    // document) — classifyRootTarget is the same split bin/cli.js uses
+    // Classify folders as roots and markdown files as documents within a root.
     { method: 'POST', match: (pathname) => pathname === '/api/roots', needs: ['body'], handler: async (ctx) => {
       const { res, body } = ctx;
       await bootRootReady;
@@ -726,9 +694,7 @@ function createServer(root, {
           broadcastSSE(sseClients, { event: 'root-promoted', rootKey: oldRoot.key, newRoot, scope });
         }
       }
-      // awaited (unlike the boot-time recordRecent below): a 200 here is a
-      // client-visible promise that the target is now recorded, and letting
-      // it dangle races other recordRecent callers over the same file
+      // Await recording so a successful response guarantees durable Recents state.
       await recordRecent(dir);
       const routeContext = { space: 'root', rootKey: result.root.key };
       if (doc) {
@@ -829,7 +795,7 @@ function createServer(root, {
       const { res, body } = ctx;
       if (typeof body.path !== 'string' || !body.path) return sendJSON(res, 400, { error: 'invalid path' });
       await recentsWrite;
-      await recents.remove(body.path);
+      await removeRecent(body.path);
       res.writeHead(204);
       return res.end();
     } },
@@ -886,17 +852,13 @@ function createServer(root, {
     { method: 'GET', match: () => true, handler: async (ctx) => {
       const { res, url } = ctx;
       const template = await fsp.readFile(SHELL_PATH, 'utf8');
-      // boot data inlined so first paint needs no /api/settings, /api/recents
-      // or root-info round trips — that post-paint gap is what flashed the
-      // wrong theme and popped Recent in late
+      // Inline boot data to avoid theme flashes and late Recents layout.
       const boot = {};
       boot.recents = await listRecents();
       boot.root = rootInfo(roots);
       await bootRootReady;
       boot.roots = rootManager.list().map(shapeRootSummary);
-      // parsed off the original URL (never the pre-decoded pathname below),
-      // so an encoded '/' inside a route segment cannot be mistaken for a
-      // separator (plan conflict #23)
+      // Parse the original URL so encoded slashes remain within route segments.
       const parsedRoute = parseRouteContext(url);
       if (!parsedRoute) {
         boot.route = { space: 'home' };
@@ -921,9 +883,7 @@ function createServer(root, {
 
   const server = http.createServer(async (req, res) => {
     try {
-      // trust boundary: the server listens on loopback only, but any web page
-      // can still address it. Reject non-loopback Host headers (DNS rebinding)
-      // and cross-origin non-GET requests (blind CSRF writes from a browser).
+      // Reject DNS rebinding and cross-origin browser writes on loopback.
       const hostname = (req.headers.host || '').replace(/:\d+$/, '');
       if (!LOOPBACK_HOSTS.has(hostname)) return sendError(res, { code: 'forbidden' });
       if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin) {
@@ -952,6 +912,7 @@ function createServer(root, {
   serverCleanup.finally(() => pendingServerCleanups.delete(serverCleanup));
   server.whenClosed = () => serverCleanup;
   let announcePromise = Promise.resolve(null);
+  server.whenAnnounced = () => announcePromise;
 
   // advisory, for external launchers that need to find a live instance;
   // showmd never reads it back to pick its own port

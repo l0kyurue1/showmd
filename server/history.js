@@ -25,9 +25,7 @@ const SOURCES = {
   baseline: 'baseline',
 };
 
-// trust boundary: strip any inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE so
-// every call below is scoped only by the explicit --git-dir/--work-tree args,
-// never by ambient environment pointing git somewhere else
+// Trust boundary: strip ambient git paths and use only explicit repositories.
 function gitEnv() {
   const env = { ...process.env };
   delete env.GIT_DIR;
@@ -49,44 +47,31 @@ async function realGitExec(prefixArgs, args, allowCodes, opts) {
   }
 }
 
-// the history store lives outside every served directory; SHOWMD_HISTORY_HOME
-// moves it, which is how tests get a real git repo without touching the
-// developer's own home
+// SHOWMD_HISTORY_HOME isolates the external history store in tests.
 function historyHome() {
   return process.env.SHOWMD_HISTORY_HOME || path.join(os.homedir(), '.local', 'share', 'showmd', 'history');
 }
 
-// legacy per-root repos (pre-rekey) live flat under historyHome() as 40-char
-// sha1 hex dirs; the new store lives under a 'store' subdirectory so
-// migration can tell the two apart by listing historyHome() once
+// Legacy SHA-named repos are flat; the new store subdirectory distinguishes them.
 function storeRoot() {
   return path.join(historyHome(), 'store');
 }
 
 const LEGACY_DIR_PATTERN = /^[0-9a-f]{40}$/;
 
-// one repo per filesystem root (POSIX "/", or a drive letter on Windows) is
-// the closest a git work-tree can get to "the whole machine": `git add`
-// reads real bytes off disk relative to --work-tree, so the work-tree has to
-// be a real ancestor of every file it will ever be asked to add
+// Each repo uses a filesystem root so its work-tree contains every tracked file.
 function driveRootOf(absPath) {
   return path.parse(absPath).root;
 }
 
-// git refuses a pathspec that walks through a symlinked ancestor (macOS's
-// /var -> /private/var is exactly this), and a synthetic "/" work-tree makes
-// every path walk from the real filesystem root, so the root must be
-// realpath'd before anything joins onto it. relPath itself is left alone:
-// resolving it would require the file to still exist, which breaks history
-// lookups for a file that was since deleted.
+// Resolve symlinked roots before building git pathspecs. Keep relPath unresolved
+// so deleted files remain addressable in history.
 async function identityAbs(root) {
   const real = await fsp.realpath(root).catch(() => path.resolve(root));
   return identityPath(real);
 }
 
-// canonical absolute path for a document, reusing root-identity.js's identity
-// normalisation so the same file reached through two different roots (or
-// through case/Unicode-equivalent spellings) always resolves to one key
+// Normalize document identity across roots, case, and Unicode spellings.
 async function keyPath(root, relPath) {
   return path.join(await identityAbs(root), relPath);
 }
@@ -141,10 +126,7 @@ async function dirSize(dir) {
   return total;
 }
 
-// gitExec is the seam: production leaves it defaulted to the real git binary
-// below, tests pass a scripted adapter instead so everything in here — the
-// amend-window decision, the fromRepo branch, prune — runs against canned
-// git output instead of a real repo
+// Tests replace gitExec with scripted output; production uses git.
 function createHistory(gitExec = realGitExec, options = {}) {
   function run(gitDir, workTree, args, allowCodes = [], extraOpts = {}) {
     return gitExec(['--git-dir', gitDir, '--work-tree', workTree], args, allowCodes, { cwd: workTree, ...extraOpts });
@@ -161,9 +143,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
 
   const repoCache = new Map();
 
-  // trust boundary: every mutating git op for a repo must flow through this
-  // chain, one at a time — concurrent `add`+`commit` pairs otherwise race on
-  // index.lock or sweep in each other's staged changes
+  // Serialize mutations per repo to protect index.lock and staged changes.
   const gitLocks = new Map();
   function withGitLock(gitDir, fn) {
     const tail = gitLocks.get(gitDir) || Promise.resolve();
@@ -172,11 +152,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return run;
   }
 
-  // one repo now serves every open root, so every showmd process on the
-  // machine can land on the same gitDir at once. The in-process chain above
-  // only serializes callers inside this one process; this file lock (atomic
-  // create, same pattern as writeFileAtomic) is what keeps two processes off
-  // the same index.lock instead of one silently losing its commit.
+  // Atomic file locks serialize separate showmd processes sharing one repo.
   const lockStaleMs = options.lockStaleMs ?? 30000;
   const lockTimeoutMs = options.lockTimeoutMs ?? 60000;
   const lockPollMs = options.lockPollMs ?? 20;
@@ -284,9 +260,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     if (!(await checkGitAvailable())) return null;
     const gitDir = historyDirFor(driveRoot);
     if (repoCache.has(gitDir)) return repoCache.get(gitDir);
-    // two showmd processes can both see a missing HEAD at once, so the
-    // check-then-init below needs the same cross-process lock a commit takes,
-    // not just the in-process repoCache guard
+    // Lock check-and-init across processes that may both observe a missing HEAD.
     const ready = withCrossProcessLock(gitDir, async () => {
       await fsp.mkdir(gitDir, { recursive: true });
       if (!fs.existsSync(path.join(gitDir, 'HEAD'))) await initRepoAt(gitDir, driveRoot);
@@ -297,10 +271,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
   }
 
 
-  // migration claims a legacy repo by renaming it out of historyHome()'s top
-  // level first: the rename is atomic, so two processes racing to migrate the
-  // same legacy dir leave exactly one winner, and the loser sees ENOENT and
-  // moves on
+  // Atomically rename a legacy repo so only one process can migrate it.
   /** @type {Promise<void> | null} */
   let migrationDone = null;
   function ensureMigrated() {
@@ -433,9 +404,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     if (!gitDir) return;
     const storeRelPath = relKeyFor(driveRoot, absPath);
     return withCrossProcessLock(gitDir, () => withGitLock(gitDir, async () => {
-      // first save of a file: seed an invisible baseline commit with the repo's
-      // HEAD content, so save deltas read against the last real commit instead
-      // of showing the whole file as added
+      // Seed a baseline so the first save diffs against repository content.
       if (!(await getLastCommit(gitDir, driveRoot, storeRelPath))) {
         const base = await repoReadAt(root, relPath, 'HEAD');
         if (base != null) {
@@ -449,9 +418,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
       if (staged.code === 0) return;
       const subject = `${source}: ${storeRelPath}`;
       const last = await getLastCommit(gitDir, driveRoot, storeRelPath);
-      // `commit --amend` always targets HEAD, so amending is only safe when this
-      // path's own last commit IS HEAD — otherwise HEAD belongs to some other
-      // path's commit and amending would fold this change into it
+      // Amend only when this path owns HEAD; otherwise another file's commit would fold in.
       const head = last ? await run(gitDir, driveRoot, ['rev-parse', 'HEAD'], [128]) : null;
       const amend = !!last && last.subject === subject && head?.code === 0 && head.stdout.trim() === last.rev
         && Date.now() - last.ts * 1000 < AMEND_WINDOW_MS;
@@ -503,9 +470,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return r.code === 0 ? r.stdout : null;
   }
 
-  // deleting a repo out from under a running git leaves half-written objects
-  // behind (ENOTEMPTY) and spawns git into a directory that no longer exists,
-  // so a prune waits its turn in the same chain every commit uses
+  // Serialize prune with commits so git never runs against a removed repo.
   const rmRepo = (dir) => fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
   async function listAllTrackedPaths(gitDir, driveRoot) {
@@ -547,11 +512,8 @@ function createHistory(gitExec = realGitExec, options = {}) {
     await run(gitDir, driveRoot, args, [], { env: { GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp } });
   }
 
-  // "Selected folder's history" can no longer delete a directory shared by
-  // every open root, so pruning one folder means: build a fresh repo holding
-  // only the paths NOT under it, replaying their full timelines, then swap it
-  // in. The old repo (and the pruned paths' blobs with it) is deleted outright
-  // afterward, so nothing pruned stays reachable in git's object store.
+  // Prune a folder by rebuilding the shared repo without its full timeline,
+  // then swap repositories so removed blobs are unreachable.
   async function prune(root) {
     await ensureMigrated();
     const absRoot = await identityAbs(root);
@@ -594,9 +556,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return done;
   }
 
-  // reads `cat-file --batch-check` output (one "<type> <size>" line per
-  // input object) and sums the blob sizes — the only shape both historySize
-  // and totalHistorySize need out of a batch-check pass
+  // Sum blob sizes from `cat-file --batch-check` output.
   function sumBlobSizes(batch) {
     if (batch.code !== 0 || !batch.stdout) return 0;
     let total = 0;
@@ -608,22 +568,8 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return total;
   }
 
-  // what prune deletes is every historical blob under a prefix, not just
-  // HEAD's current tree, so the size readout has to count them all: one
-  // `rev-list --objects` walks HEAD's full history and lists every reachable
-  // object exactly once (blobs dedupe by content across commits and across
-  // paths — verified against a real repo, not assumed), then one
-  // `cat-file --batch-check` reads every listed object's size in a single
-  // pass. Two spawns total, regardless of path or commit count.
-  //
-  // %(rest) has to be in the format even though its value is discarded:
-  // without it, batch-check tries to resolve each *whole line* (hash plus
-  // whatever rev-list appended — a path for blobs, a bare trailing space for
-  // the anonymous root tree) as one revision expression, and anything past
-  // the hash makes that fail, so every non-commit object comes back
-  // "missing". %(rest) is what tells batch-check to split at the first
-  // whitespace and use only the hash for the lookup (verified against a real
-  // repo: every object resolved once this was added, zero still missing).
+  // Count unique reachable blobs under pathspec. %(rest) makes batch-check
+  // ignore paths appended by rev-list instead of reporting objects missing.
   async function treeSizeFor(gitDir, driveRoot, pathspec) {
     const args = ['rev-list', '--objects', 'HEAD'];
     if (pathspec) args.push('--', pathspec);
@@ -633,10 +579,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return sumBlobSizes(batch);
   }
 
-  // prefix query over the shared repo's own object sizes: with one repo
-  // covering every open root, a directory size on disk no longer maps to a
-  // single root, so a root's own footprint is every historical blob under
-  // its own pathspec rather than a stat on a dedicated directory
+  // A root's footprint is the historical blobs reachable under its pathspec.
   async function historySize(root) {
     await ensureMigrated();
     const absRoot = await identityAbs(root);
@@ -647,12 +590,8 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return treeSizeFor(gitDir, driveRoot, prefixRel || null);
   }
 
-  // the store's own dirSize would count every repo's fixed git overhead
-  // (hook templates, packfiles) which historySize's prefix query deliberately
-  // excludes, so the total has to be the same tracked-content sum across
-  // every repo the store holds, not a stat on the store directory.
-  // --batch-all-objects skips the rev-list walk entirely (there is no prefix
-  // to filter by), one spawn per repo in the store.
+  // Sum tracked content, not fixed git overhead. Without a path prefix,
+  // --batch-all-objects avoids the rev-list pass.
   async function totalHistorySize() {
     await ensureMigrated();
     let entries;
@@ -697,10 +636,8 @@ function createHistory(gitExec = realGitExec, options = {}) {
     return r.code === 0 ? r.stdout : null;
   }
 
-  // One timeline per file: unpushed history saves on top of the served repo's own
-  // commits. A history save is a working-copy checkpoint since the last commit, so
-  // once a real commit absorbs it — or the file matches HEAD again (edit then
-  // revert) — it drops out of the timeline, still stored, just not shown.
+  // Show uncommitted checkpoints above repository commits; hide checkpoints
+  // absorbed by a commit or a clean revert.
   async function timeline(root, relPath) {
     const [saved, commits] = await Promise.all([list(root, relPath), repoList(root, relPath)]);
     const saves = saved || [];
@@ -734,9 +671,7 @@ function createHistory(gitExec = realGitExec, options = {}) {
   };
 }
 
-// module.exports must be a literal object of plain identifiers (not the
-// direct call result) — Node's CJS→ESM named-export detection is purely
-// syntactic and can't see through a function call
+// Keep literal exports so Node can detect CJS named exports syntactically.
 const {
   checkGitAvailable, record, timeline, contentAt, diffAt, prune, pruneAll, historySize, totalHistorySize, migrateLegacyHistory,
 } = createHistory();

@@ -5,9 +5,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const history = require('./history.js');
 
-// trust boundary: every filesystem path built from a request must resolve
-// inside `base` before we touch disk. Exported because asset serving needs the
-// same guard against a different base.
+// Trust boundary: request paths must resolve inside their filesystem base.
 function safeResolve(base, requested) {
   const resolved = path.resolve(base, requested);
   const rel = path.relative(base, resolved);
@@ -73,9 +71,7 @@ async function readDirSafe(dir) {
   return fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
 }
 
-// skill directories are frequently symlinks (e.g. `~/.claude/skills/*` links
-// into a shared store); fs.Dirent reports a symlink's own type, not its
-// target's, so isDirectory() would silently skip them without this extra stat
+// Stat symlinks so shared-store skill directories are not skipped.
 async function isDirEntry(full, entry) {
   if (!entry.isSymbolicLink()) return entry.isDirectory();
   const st = await fsp.stat(full).catch(() => null);
@@ -94,9 +90,7 @@ function isDirSync(p) {
 
 async function walkFiles(dir, root, out, opts = {}, depth = 0) {
   if (depth > MAX_WALK_DEPTH) return out; // depth cap guards against symlink cycles; real cycle detection if this ever bites
-  // strictRoot lets the root's own readdir error escape while subdirectories stay
-  // swallowed: one bad subfolder must not sink a tree, but a denied root reaching
-  // the caller as "empty" is indistinguishable from a bug
+  // strictRoot reports a denied root but tolerates unreadable subfolders.
   const entries = depth === 0 && opts.strictRoot
     ? await fsp.readdir(dir, { withFileTypes: true })
     : await readDirSafe(dir);
@@ -117,9 +111,7 @@ async function walkFiles(dir, root, out, opts = {}, depth = 0) {
 
 const walkMd = (dir, root, out) => walkFiles(dir, root, out, { filter: isMarkdownFile });
 
-// Every operation takes a document id. Addressing determines whether that id
-// is `relPath` or `key/relPath`. Resolution never leaves a construction-time
-// root snapshot, and callers never see a filesystem path.
+// Resolve document IDs against the construction-time root snapshot only.
 /**
  * @param {import('../types/showmd').DocumentRoot[]} initialRoots
  * @param {import('../types/showmd').DocumentStoreConfig} config
@@ -127,9 +119,7 @@ const walkMd = (dir, root, out) => walkFiles(dir, root, out, { filter: isMarkdow
 function createDocumentStore(initialRoots, { addressing }, historyImpl = history) {
   const roots = initialRoots.map((root) => ({ ...root }));
   const keyed = addressing === 'keyed';
-  // one hash per document is not enough: back-to-back saves each stamp their
-  // own, and a watcher event for the earlier one can arrive after the later one
-  // stamped, which would read our own content as somebody else's
+  // Keep multiple hashes because watcher events may arrive out of save order.
   const selfWrites = new Map();
   function freshMarks(id) {
     const marks = (selfWrites.get(id) || []).filter((m) => Date.now() - m.at <= SELF_WRITE_TTL_MS);
@@ -152,10 +142,7 @@ function createDocumentStore(initialRoots, { addressing }, historyImpl = history
     return run;
   }
 
-  // Runtime shutdown closes admission before stopping its watcher, then waits
-  // here without reaching into the per-document lock implementation. Tracking
-  // the public operation (rather than only its lock tail) also covers restore's
-  // history lookup before it reaches writeAt().
+  // Shutdown closes admission and drains every accepted write, including restores.
   let acceptingWrites = true;
   const acceptedWrites = new Set();
   function admitWrite(fn) {
@@ -198,11 +185,7 @@ function createDocumentStore(initialRoots, { addressing }, historyImpl = history
     return full && { dir, rel, full };
   }
 
-  // the watcher fires for our own writes too. Event counting cannot tell the
-  // two apart: macOS coalesces our write and an outside edit that lands right
-  // after it into one event, and a lone save can raise two. What holds is the
-  // content — if the file still reads back something we wrote, the event was
-  // ours; anything else came from outside and earns a History entry.
+  // Watcher event counts are unreliable; match content against recent writes.
   async function isSelfWrite(id) {
     const marks = freshMarks(id);
     if (!marks.length) return false;
@@ -305,9 +288,7 @@ function createDocumentStore(initialRoots, { addressing }, historyImpl = history
       return fsp.access(loc.full).then(() => true, () => false);
     },
 
-    // reverse of locate(): a real fs path -> its doc id, if a served root contains it.
-    // root.dir itself may sit behind a symlink (e.g. macOS /var -> /private/var), so
-    // it's realpath'd too before the containment check.
+    // Reverse locate after realpathing roots for a reliable containment check.
     async docIdForPath(full) {
       if (!isMarkdownFile(full)) return null;
       for (const root of roots) {
@@ -372,9 +353,7 @@ function createDocumentStore(initialRoots, { addressing }, historyImpl = history
 
     consumeSelfWrite: isSelfWrite,
 
-    // classifying and committing must happen as one step, under the same lock a
-    // write takes: otherwise a save landing in between is committed here as
-    // somebody else's edit, and the save's own commit then finds nothing staged
+    // Classify and commit under the write lock to avoid misattributing saves.
     recordIfExternal(id) {
       return admitWrite(() => {
         const loc = locate(id);

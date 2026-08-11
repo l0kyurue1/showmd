@@ -134,9 +134,7 @@ test('history sizes land in the prune labels', () => {
   assert.equal(rowByKey('pruneAll').label, 'All saved histories · 5.0 MB');
 });
 
-// historySizeBytes/historyTotalBytes are undefined (not null) until the
-// separate GET /api/history-size request resolves — a loading placeholder,
-// distinct from null's "no folder selected"
+// Undefined history sizes mean loading; null means no folder selected.
 test('history sizes not yet fetched show a loading placeholder, not "no folder"', () => {
   applyDerivedValues({ historySizeBytes: undefined, historyTotalBytes: undefined });
   assert.equal(rowByKey('prune').label, "Selected folder's history · …");

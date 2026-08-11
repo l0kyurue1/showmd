@@ -76,10 +76,7 @@ export function rowByKey(key) {
   return SETTINGS_GROUPS.flatMap((g) => g.rows).find((r) => r.key === key);
 }
 
-// mutates the SETTINGS_GROUPS row configs with whatever the server just
-// reported, and reports whether a restart is needed — shared by the full
-// rebuild (open) and the in-place patch (refreshDerived) so the two never
-// drift on what counts as "derived"
+// Patch derived row state and report whether settings require a restart.
 export function applyDerivedValues(values) {
   if (values.browsers) {
     const browserRow = rowByKey('browser');
@@ -93,9 +90,7 @@ export function applyDerivedValues(values) {
       : values.checkFailed ? `${version} · last check failed`
       : `${version} · up to date`;
   }
-  // historySizeBytes/historyTotalBytes arrive from a separate, slower
-  // request than the rest of these values (GET /api/history-size) — absent
-  // (undefined) means still loading, null means no folder is selected
+  // History sizes load separately: undefined is loading, null is no folder.
   const pruneRow = rowByKey('prune');
   if (pruneRow) {
     const loading = values.historySizeBytes === undefined;
@@ -212,9 +207,7 @@ export function createSettingsView({
 }) {
   let justUpdatedVersion = null;
   let restarting = false;
-  // set while any settings custom-select menu is open, cleared on close; lets
-  // open() close a still-open menu before replaceChildren() orphans its
-  // document listeners (e.g. an SSE-triggered rebuild mid-open)
+  // Track the open custom select so rebuilds can close its document listeners.
   let closeOpenMenu = null;
   // the values object loadHistorySizes() patches once its slow fetch
   // resolves, after the rest of the page already rendered from fetchSettings()
@@ -350,18 +343,13 @@ export function createSettingsView({
     });
   }
 
-  // theme/font settings apply live outside the settings page too (the ?lab panel,
-  // the read/edit doc), so those two keys stay routed through setTheme/applyFont*
-  // instead of writing --doc-font/--doc-size only while settings is open
+  // Route theme and font changes through their app-wide live effects.
   function applyLiveEffect(key, value) {
     if (key === 'fontPreset') applyFontPreset(value);
     else if (key === 'fontSize') applyFontSize(value);
   }
 
-  // every control change and every per-row reset ends the same way: persist,
-  // reapply the live effect if there is one, patch the rows that can have
-  // changed (restart chip, history sizes, install/register state) in place —
-  // a full rebuild here would recreate every control on the page and drop focus
+  // Persist, apply live effects, then patch derived rows without dropping focus.
   async function saveAndRefresh(row, value) {
     if (row.key === 'colorMode') setTheme(value);
     else {
@@ -625,9 +613,7 @@ export function createSettingsView({
     }
   }
 
-  // GET /api/history-size is its own slow prefix query over the shadow git
-  // store, so it never rides along with fetchSettings() — the two size rows
-  // render a loading placeholder first and patch in once this resolves
+  // Load slow history sizes separately and patch their placeholders.
   async function loadHistorySizes() {
     let sizes;
     try {

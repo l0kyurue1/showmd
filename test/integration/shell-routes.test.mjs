@@ -102,9 +102,7 @@ test('an unknown root key resolves to root_not_open, not another root\'s content
   }
 });
 
-// history sizes are slow prefix queries, so they never rode along in the
-// inlined boot payload; GET /api/history-size scopes to whichever root the
-// caller asks for, same as /api/settings did before the split
+// History sizes load separately and remain scoped to the requested root.
 test('the inlined boot settings carry no history size fields; /api/history-size scopes to the requested root', async () => {
   const root = tmp('showmd-shell-settings-root-');
   try {

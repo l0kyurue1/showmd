@@ -205,9 +205,7 @@ export function createPipeline(markdownit) {
     return true;
   });
 
-  // Only two shapes are accepted, both alone on their lines: `<p align="center">x</p>`
-  // and an open tag / content / close tag spread over separate lines. Anything else
-  // falls through and stays escaped.
+  // Accept only standalone one-line or three-line centered paragraphs.
   md.block.ruler.before('html_block', 'html_wrapper', (state, startLine, endLine, silent) => {
     if (state.sCount[startLine] - state.blkIndent >= 4) return false;
     const line = state.src.slice(state.bMarks[startLine] + state.tShift[startLine], state.eMarks[startLine]);

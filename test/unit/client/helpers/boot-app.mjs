@@ -171,11 +171,7 @@ function createTimerControl(deferredDelays) {
   return { setTimeoutControlled, clearTimeoutControlled, run, count };
 }
 
-// Boots the real client/index.html + client/app.js under jsdom: same markup
-// and module the browser loads, with fetch/EventSource/matchMedia faked and
-// window-error listeners wired so a listener throwing (the ReferenceError
-// class of bug) surfaces as a recorded error instead of vanishing into
-// jsdom's default "report to window, don't propagate" behavior.
+// Boot the real client under jsdom with browser seams and captured window errors.
 export async function bootApp({
   tree = [], root = null, settings = {}, settingsResponse = null, files = {}, rawOverrides = {},
   userAgent, systemDark = false, localStorageSeed = {},
@@ -183,18 +179,13 @@ export async function bootApp({
   deferredTimeouts = [],
 } = {}) {
   bootCount += 1;
-  // legacy `root:` callers get a synthesized Root Space route/summary under a
-  // fixed test key, so every existing direct-boot-into-a-file test keeps
-  // working without knowing about routes at all
+  // Synthesize a fixed Root Space for legacy root-only fixtures.
   const resolvedRoute = route !== undefined ? route : (root ? { space: 'root', rootKey: TEST_ROOT_KEY } : null);
   const resolvedRoots = roots !== undefined ? roots
     : (root ? [{ key: TEST_ROOT_KEY, dir: root.dir, name: root.name || 'root', url: `/r/${TEST_ROOT_KEY}/` }] : []);
   const bootUrl = resolvedRoute ? new URL(formatRouteContext(resolvedRoute), 'http://localhost/').href : 'http://localhost/';
 
-  // settings is deliberately absent here (unlike the real server's boot.settings):
-  // existing tests rely on bootData.settings staying unset so init() falls
-  // through to the fetched /api/settings route below, and settingsResponse
-  // overrides that fetch independently of the `settings` param.
+  // Omit boot settings so tests exercise /api/settings; settingsResponse overrides it.
   const bootData = { root, roots: resolvedRoots };
   if (resolvedRoute) bootData.route = resolvedRoute;
   if (routeError) bootData.routeError = routeError;
@@ -206,9 +197,7 @@ export async function bootApp({
   // pretendToBeVisual: CodeMirror's editor bundle calls window.requestAnimationFrame
   const dom = new JSDOM(html, { url: bootUrl, pretendToBeVisual: true });
   const { window } = dom;
-  // jsdom's constructor `userAgent` option only takes effect nested under
-  // `resources`, which also switches on real (network) resource loading for
-  // <link>/<script> tags — overriding the getter directly avoids that.
+  // Override userAgent directly to avoid enabling jsdom network resources.
   if (userAgent) Object.defineProperty(window.navigator, 'userAgent', { value: userAgent, configurable: true });
   const errors = [];
   window.addEventListener('error', (e) => errors.push(e.error || new Error(e.message)));
@@ -234,9 +223,7 @@ export async function bootApp({
         : { status: 404, body: { error: 'not found' } };
     });
   }
-  // settingsResponse overrides the boot-time settings fetch itself (init()
-  // awaits it before bootApp returns, so a test can't stub this route after
-  // the fact the way it can with lazily-fetched endpoints)
+  // Stub eager settings before init; lazy endpoints can be replaced later.
   fetchFake.on('GET', '/api/settings', () => (settingsResponse || { body: settings }));
   fetchFake.on('GET', '/api/recents', () => ({ body: { recents: [] } }));
   fetchFake.on('GET', '/api/roots', () => ({ body: { roots: resolvedRoots } }));

@@ -12,9 +12,7 @@ function tmp(prefix) {
   return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
-// isolates settings-backed routes (restart snapshots included) from whatever
-// this machine has for a real, live showmd; a fixed instanceId lets adoption
-// tests target this process without waiting on protocol.js's random one
+// Isolate settings and fix instanceId so adoption tests target this server.
 process.env.SHOWMD_SETTINGS_HOME = tmp('showmd-settings-home-restart-');
 process.env.SHOWMD_INSTANCE_ID = 'restart-test-old-instance';
 
@@ -26,9 +24,7 @@ function fakeKey(seed) {
   return `r_${seed.repeat(22).slice(0, 22)}`;
 }
 
-// no matcher/abort-on-match: the point of this test is that the server ends
-// the stream itself (via res.end() right after the broadcast) rather than
-// leaving it open for us to time out on — aborting early would hide that
+// Let the server end the SSE stream; aborting on match would hide that contract.
 async function collectSSEUntilClosed(url, ms = 4000) {
   const controller = new AbortController();
   const events = [];

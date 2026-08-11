@@ -154,12 +154,8 @@ export function createHistoryView({ panelBtn, panel, verList, restoreBtn, diffTi
     }
   }
 
-  // beforeCommit: the diff pane only becomes visible once diffBody already
-  // holds the new diff, so switching versions never flashes the old one.
-  // A failed diff fetch must never render as an empty diff (that reads as
-  // "no changes"), so any non-ok response backs out of the Version View
-  // instead; a 503 additionally means History itself is unavailable, so it
-  // gets retracted from the UI the same way the list load already does.
+  // Load the new diff before showing it; failures leave Version View.
+  // A 503 also retracts unavailable History controls.
   async function showVersion(v) {
     await viewState.dispatch({ type: 'version', rev: v.rev, repo: v.repo }, {
       beforeCommit: async () => {

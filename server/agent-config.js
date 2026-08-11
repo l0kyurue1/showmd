@@ -19,9 +19,7 @@ function listMdFiles(dir) {
   return entries.filter((e) => e.isFile() && isMd(e.name)).map((e) => e.name).sort();
 }
 
-// v1 scope: Claude Code and Codex only, the AGENT_REGISTRY entries carrying a
-// `key`. Codex's config.toml (and any other non-md file) is intentionally
-// skipped — only markdown instructions/memory are browsable here.
+// Browse markdown config for keyed agents only; v1 supports Claude and Codex.
 const AGENTS = AGENT_REGISTRY.filter((a) => a.key).map((a) => ({
   key: a.key,
   displayName: a.configLabel || a.displayName,
@@ -31,10 +29,8 @@ const AGENTS = AGENT_REGISTRY.filter((a) => a.key).map((a) => ({
   projectsDir: a.projectsDir,
 }));
 
-// Claude Code slugs a project by replacing every non-alphanumeric character
-// with '-' — one for one, no collapsing, no case folding — then truncating to
-// SLUG_MAX with a hash suffix. The hash is not reproducible from outside, so an
-// over-long slug is matched on its truncated prefix instead.
+// Claude slugs characters one-for-one, then hashes names beyond SLUG_MAX.
+// The external hash is unknown, so long slugs match by prefix.
 const SLUG_MAX = 200;
 
 function projectSlug(absPath) {
@@ -54,11 +50,8 @@ function slugMatchesPath(slug, absPath) {
   return computed.length > SLUG_MAX && want.startsWith(`${computed.slice(0, SLUG_MAX)}-`);
 }
 
-// The slug is lossy, so it is matched against ~/.claude.json's own project list
-// (the same harvest skills.js does) to recover the real path where possible,
-// falling back to a best-effort slash-split of the slug itself. The visible
-// label is always just the directory basename, disambiguated with its parent
-// segment on collision (e.g. two checkouts both named "showmd").
+// Recover lossy slugs from ~/.claude.json, then fall back to slash splitting.
+// Duplicate basenames include their parent segment.
 function projectLabelsFromSlugs(home, slugs) {
   let claudeJson;
   try {
@@ -184,9 +177,7 @@ function invalidate() {
   treeCache.invalidate();
 }
 
-// a doc id's leading `key/` segment identifies which agent built it (e.g.
-// `claude-rules/foo.md`, `codex-home/AGENTS.md`) so a document request routes
-// without knowing the agent in advance
+// A doc ID's key prefix routes it to the agent that produced it.
 function agentKeyForId(id) {
   const slash = id.indexOf('/');
   if (slash === -1) return null;

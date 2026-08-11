@@ -7,11 +7,7 @@ const fsp = require('node:fs/promises');
 const { relPosix, isDirSync, walkMd, walkFiles } = require('./documents.js');
 const { createTreeCache } = require('./tree-cache.js');
 
-// hashes every file under a directory into one digest, so two same-name skills
-// in one project (e.g. independent .agents/skills/X and .claude/skills/X
-// copies) can be compared for identical content; only run on a name collision,
-// so a full recursive read is cheap. includeHidden: a dotfile is real content
-// here — skipping it would call two dirs identical when only one carries it
+// Hash colliding skill directories, including hidden files, to dedupe copies.
 async function hashDir(dirAbs) {
   const files = await walkFiles(dirAbs, dirAbs, [], { includeHidden: true });
   files.sort();
@@ -159,9 +155,7 @@ function detectedAgents(home, cwd) {
   return AGENT_REGISTRY.filter((a) => a.detect(home, cwd));
 }
 
-// realpath -> registry keys of every detected agent's own dir whose entry
-// resolves there; realpaths are cached per raw path since a dir can list
-// many entries
+// Map agent-directory realpaths to detected registry keys, caching each raw path.
 function scanAgentBadges(home, cwd, detected) {
   const cache = new Map();
   const byRealpath = new Map();
@@ -259,9 +253,7 @@ function resolveInstall(entry, home) {
   return { install: 'manual' };
 }
 
-// a "skill" is an immediate child directory of a skill root that contains
-// SKILL.md directly at its top; symlinked children (e.g. ~/.claude/skills/*
-// -> ~/.agents/skills/*) resolve the same way isDir() does elsewhere here
+// Skills are immediate child directories containing SKILL.md; follow symlinks.
 function scanSkillDirs(rootList) {
   const found = [];
   for (const r of rootList) {
@@ -289,10 +281,7 @@ function scanSkillDirs(rootList) {
   return found;
 }
 
-// `walkMd` is injected so server.js stays the single recursive-.md-walk
-// implementation. `cwd` is machine scope for agent detection, not per-root —
-// no default, an implicit one silently made tests and the server probe
-// different directories.
+// Inject walkMd; require cwd so agent detection cannot silently use another scope.
 /**
  * @param {import('../types/showmd').SkillRoot[]} roots
  * @param {import('../types/showmd').SkillsTreeOptions} opts
@@ -310,9 +299,7 @@ async function buildSkillsTree(roots, { walkMd, home = os.homedir(), cwd, mode =
   const projectRoots = roots.filter((r) => scopeForLabel(r.label) === 'Project');
 
   const detected = detectedAgents(home, cwd);
-  // an agent with no globalDir (e.g. PromptScript) is excluded from the
-  // Global canonical-store short-circuit, mirroring npx's own gate; project
-  // scope has no such field to be missing, so no exclusion there
+  // Match npx: agents without globalDir skip the Global store shortcut.
   const universalKeysGlobal = new Set(detected.filter((a) => a.universal && a.globalDir).map((a) => a.name));
   const universalKeysProject = new Set(detected.filter((a) => a.universal).map((a) => a.name));
   const agentBadges = scanAgentBadges(home, cwd, detected);
@@ -356,10 +343,7 @@ async function buildSkillsTree(roots, { walkMd, home = os.homedir(), cwd, mode =
     return relPosix(found.project || cwd, found.skillDirAbs);
   }
   const projectFound = scanSkillDirs(projectRoots).filter((found) => !byRealpath.has(found.real));
-  // group by (project, skill name) to catch a skill installed independently
-  // in both .agents/skills and .claude/skills — different realpaths, so the
-  // dedupe above keeps both; each project only ever contributes those two
-  // candidate dirs, so a collision group is never bigger than 2
+  // Group same-name .agents and .claude copies that realpath dedupe missed.
   const byProjectName = new Map(); // project dir -> skill name -> found[]
   for (const found of projectFound) {
     const projectDir = found.project || cwd;
@@ -461,10 +445,7 @@ function discoverSkillRoots({ mode = 'all', projectDirs = [], home, claudeJsonPa
   });
 }
 
-// doc-mode only: skills for the folder currently open, not a fixed root — a
-// root swap (or a watcher-detected skill-file change) invalidates this. Bundles
-// a second multi-root doc store over the same skill dirs, since those files
-// live outside the served root and the main store can never resolve them.
+// Doc mode caches the current root's skills in a separate multi-root store.
 const treeCache = createTreeCache();
 
 /** @param {import('../types/showmd').TreeCacheOptions} [opts] */

@@ -1,9 +1,6 @@
 const CHANNEL_COMMANDS = { brew: 'brew upgrade showmd', 'npm-global': 'npm i -g showmd-cli@latest' };
 
-// dismissal is keyed by "the version being dismissed" rather than a bare
-// on/off flag, so a later release makes the CTA reappear on its own; the
-// showmd and app-only states share this one key since they're both spelled
-// "There is a new version X" for the same X (see below)
+// Version-keyed dismissal lets the CTA return for later releases.
 export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVersion } = {}) {
   if (justUpdatedVersion) {
     return { state: 'updated', title: `App updated to ${justUpdatedVersion}`, success: true, showDismiss: false };

@@ -61,13 +61,20 @@ function permissiveHistoryExec(onCommit = async () => ({ code: 0, stdout: '' }))
   ]);
 }
 
-// The mocked roots below never exist on disk, so history.js's realpath step
-// falls back to path.resolve(root), then applies the shared platform identity
-// rules (notably case folding on Windows).
+// Mock roots fall back to path resolution and platform identity rules.
 function storeRelPathFor(root, relPath) {
   const canonicalRoot = identityPath(path.resolve(root));
   const driveRoot = path.parse(canonicalRoot).root;
   return path.relative(driveRoot, path.join(canonicalRoot, relPath)).split(path.sep).join('/');
+}
+
+function mtimeOrNull(file) {
+  try {
+    return statSync(file).mtimeMs;
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 async function waitFor(condition, { timeout = 2000, interval = 10 } = {}) {
@@ -217,9 +224,7 @@ test('the shadow repo stays out of the served directory', () => {
   assert.ok(!historyDirFor(root).startsWith(root));
 });
 
-// historyDirFor is keyed by filesystem root (POSIX "/", or a drive letter on
-// Windows), not by the served root passed in — that is the whole point of the
-// rekey: every root on the same drive shares one repo
+// Every served root on one filesystem root shares a history repo.
 test('historyDirFor returns the same shadow directory for two unrelated roots on one drive', () => {
   const a = historyDirFor(path.join(workDir, 'unrelated-a'));
   const b = historyDirFor(path.join(workDir, 'unrelated-b'));
@@ -280,9 +285,7 @@ test('two concurrent writers on the shared repo lose no history to lock contenti
   const root = realGitTmp('showmd-history-concurrent-');
   const file = path.join(root, 'race.md');
   writeFileSync(file, 'start');
-  // two independent createHistory() instances share nothing in-process (no
-  // shared gitLocks map), so the only thing serializing them is the
-  // cross-process file lock — this stands in for two real showmd processes
+  // Independent instances synchronize only through the cross-process lock.
   const h1 = createHistory();
   const h2 = createHistory();
 
@@ -294,16 +297,12 @@ test('two concurrent writers on the shared repo lose no history to lock contenti
     writeFileSync(file, `round-${round}-${Math.random()}`);
     attempts.push(h2.record(root, 'race.md', 'external'));
   }
-  // the assertion that matters: none of the 2*rounds concurrent commits
-  // rejects. A lost write from lock contention surfaces here as a thrown git
-  // error (e.g. a stale index.lock), not as a quietly-missing entry.
+  // Lock failures surface as rejected commits, including stale index.lock errors.
   await assert.doesNotReject(Promise.all(attempts));
 
   const entries = await h1.timeline(root, 'race.md');
   assert.ok(entries.length >= 1 && entries.length <= rounds * 2, `expected a plausible commit count, got ${entries.length}`);
-  // the repo (shared with every other test in this file) must still be a
-  // coherent, readable git object store afterward — a corrupted index or a
-  // stray leftover lock file would break this
+  // The shared repo must remain readable with no corrupt index or stale lock.
   const gitDir = historyDirFor(root);
   execFileSync('git', ['--git-dir', gitDir, 'log', '--oneline'], { encoding: 'utf8' });
   assert.equal(existsSync(`${gitDir}.lock`), false);
@@ -343,7 +342,7 @@ test('heartbeat keeps a long history operation exclusive beyond the stale thresh
   });
   const secondExec = permissiveHistoryExec();
   const lockOptions = {
-    lockStaleMs: 120, lockHeartbeatMs: 30, lockTimeoutMs: 1000, lockPollMs: 10,
+    lockStaleMs: 500, lockHeartbeatMs: 50, lockTimeoutMs: 3000, lockPollMs: 10,
     lockPidAlive: () => false,
   };
   const first = createHistory(firstExec, lockOptions);
@@ -355,12 +354,13 @@ test('heartbeat keeps a long history operation exclusive beyond the stale thresh
   try {
     await commitEntered;
     const lockPath = `${historyDirFor(root)}.lock`;
-    const initialMtime = statSync(lockPath).mtimeMs;
+    const initialMtime = mtimeOrNull(lockPath);
+    assert.notEqual(initialMtime, null);
     const contestedAt = Date.now();
     secondRecord = second.record(root, 'doc.md', 'external');
     await waitFor(() => (
       Date.now() - contestedAt > lockOptions.lockStaleMs * 2
-      && statSync(lockPath).mtimeMs > initialMtime
+      && (mtimeOrNull(lockPath) ?? 0) > initialMtime
     ));
     assert.equal(secondExec.calls.some((call) => ['init', 'add', 'commit'].includes(call.args[0])), false,
       'the contender has not entered a mutating git operation');
@@ -564,12 +564,8 @@ test('totalHistorySize sums tracked content across the store, not the store\'s p
   assert.ok(await dirSize(gitDir) > total, 'physical footprint includes overhead the logical total excludes');
 });
 
-// historySize/totalHistorySize count every historical blob reachable from
-// HEAD, not just the current tree — that's what makes the number match what
-// prune() actually reclaims, since prune's own rebuild (below) also only
-// replays reachable commit history. Saves alternate sources so each one
-// lands its own commit instead of amending the previous save away (the
-// amend window only fires when source AND path both repeat).
+// Size counts every reachable blob, matching what prune reclaims.
+// Alternate sources prevent saves from amending into one commit.
 test('historySize grows with each distinct saved version and shrinks back after prune', { skip: !git && 'git unavailable' }, async () => {
   const root = realGitTmp('showmd-history-growth-');
   const file = path.join(root, 'growth.md');

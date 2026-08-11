@@ -1,9 +1,4 @@
-// Module hook (registered by boot-app.mjs) that swaps app.js's dynamic
-// import('./dist/editor.js') for an in-memory stand-in. The real bundle is
-// CodeMirror 6, which needs real layout/measurement the jsdom environment
-// cannot provide (see the "delayedAndroidKey" crash from its rAF measure
-// loop) — booting it is not what these tests are for. app.js's own
-// mode-switch wiring is.
+// Replace CodeMirror with an in-memory editor; jsdom cannot provide its layout.
 const FAKE_EDITOR_URL = 'fake-editor:main';
 
 const FAKE_EDITOR_SOURCE = `

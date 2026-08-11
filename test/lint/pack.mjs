@@ -27,9 +27,7 @@ for (const rel of shipped) {
   }
 }
 
-// install-app.js, folder-picker.js and install-skill.js reach these by
-// path.join, not require, so the scan above cannot see them — a missing file
-// would surface only when a user installs the desktop app or the skill
+// Guard runtime assets referenced by path rather than require.
 const RUNTIME_FILES = [
   'skills/showmd/SKILL.md',
   'icons/showmd.icns',

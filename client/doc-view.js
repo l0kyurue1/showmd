@@ -2,9 +2,7 @@ import { TASK_CLASS, toggleTaskMark, frontmatterEndLine } from './syntax.js';
 
 const DOTS_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/><path d="M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/></svg>';
 
-// Read Mode's adapter of the Block Renderer: renders a document to `doc`,
-// enhances it (block widgets, task checkboxes, collapsible headings) and
-// routes every edit made in place (task toggles) through the Save Flow.
+// Render and enhance Read Mode, routing in-place edits through Save Flow.
 export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronSvg, skillMetaHTML, renderProperties, refreshInfo }) {
   const collapsedHeadings = new Set();
   let currentText = '';

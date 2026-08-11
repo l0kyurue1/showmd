@@ -1,7 +1,4 @@
-// first modal in showmd: native <dialog> gives focus trap, Escape-to-cancel and
-// backdrop dimming for free. The dialog itself carries no padding, so its box
-// exactly matches the visible card — a click landing on `dialog` itself (not a
-// descendant) is therefore always a backdrop click.
+// With no dialog padding, a click on the dialog itself is a backdrop click.
 function confirmDialogEl(id) {
   let dialog = document.getElementById(id);
   if (dialog) return dialog;

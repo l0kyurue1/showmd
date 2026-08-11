@@ -28,10 +28,7 @@ async function detectBrowsersLinux(pathDirs) {
   return found;
 }
 
-// any app whose bundle claims it can open http/https URLs counts as a browser.
-// The shape below is a `plutil -convert json -o -` dump of an Info.plist.
-// Throughout this file, injectable readPlist/appDirs/home/clock parameters exist
-// so tests can run these paths without shelling out to the real plutil.
+// Treat bundles declaring HTTP(S) schemes as browsers. Seams avoid real plutil in tests.
 function bundleClaimsHttpScheme(info) {
   if (!info || !Array.isArray(info.CFBundleURLTypes)) return false;
   return info.CFBundleURLTypes.some((t) => Array.isArray(t.CFBundleURLSchemes)
@@ -62,9 +59,7 @@ function launchServicesSecurePlist(home = os.homedir()) {
   return path.join(home, 'Library', 'Preferences', 'com.apple.LaunchServices', 'com.apple.launchservices.secure.plist');
 }
 
-// this GET is polled after every settings save (refreshSettingsDerived), and
-// LaunchServices only changes when the user runs "Change All..." — a lifetime
-// cache like darwinBrowserCache would miss that, so this uses a short TTL instead
+// Use a short TTL because Change All can alter LaunchServices mid-process.
 const MD_HANDLER_CACHE_TTL_MS = 10_000;
 let mdHandlerCache = null; // { value, ts, bundleId }
 
@@ -80,9 +75,7 @@ function _setMdHandlerCacheTestHooks({ now, readPlist } = {}) {
   _readMdHandlerPlist = readPlist || readPlutilJson;
 }
 
-// passing readPlist/plistPath/home also bypasses the cache. Any read/parse
-// failure (missing file, sandboxed plutil, malformed plist) falls through to
-// null, which reads as "not the default" — never throws
+// Test seams bypass the cache; plist failures mean not default and never throw.
 async function detectMdHandlerDefault({ platform = process.platform, bundleId, home, plistPath, readPlist } = {}) {
   if (platform !== 'darwin') return false;
   if (readPlist || plistPath || home) {
@@ -97,10 +90,7 @@ async function detectMdHandlerDefault({ platform = process.platform, bundleId, h
   return mdHandlerCache.value;
 }
 
-// Dirent reports a symlink's own type, not its target's — Safari.app is a
-// symlink to /System/Cryptexes/App/... on current macOS, so a symlink needs
-// an extra stat to be recognized as a directory at all (documents.js's
-// isDirEntry is the same fix, for the same reason)
+// Safari.app may be a symlink, so stat symlinks before rejecting them.
 async function isDir(full, entry) {
   return isDirEntry(full, entry);
 }
@@ -136,9 +126,7 @@ async function detectBrowsersDarwin(appDirs, readPlist = readPlutilJson) {
   return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
-// the darwin scan shells out to plutil once per installed app; nothing about
-// the result can change without a process restart, so it's cached for the
-// server's lifetime instead of recomputed on every GET /api/settings
+// Cache macOS browser scanning because installed apps do not change mid-process.
 let darwinBrowserCache = null;
 
 // scans /Applications + ~/Applications (darwin) or $PATH (linux). Windows is

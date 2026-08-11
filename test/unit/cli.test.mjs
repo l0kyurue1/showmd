@@ -73,29 +73,35 @@ test('buildOpenBrowserCommand: darwin, known browsers resolve to a bundle id (re
   assert.deepEqual(buildOpenBrowserCommand('darwin', 'http://x/', 'Brave Browser'), { cmd: 'open', args: ['-b', 'com.brave.Browser', 'http://x/'], launcher: true });
 });
 
-test('buildOpenBrowserCommand: win32 keeps the empty start title argument', () => {
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'default'), { cmd: 'cmd', args: ['/c', 'start', '', 'http://x/'], launcher: true });
+test('buildOpenBrowserCommand: win32 opens the default browser without a command shell', () => {
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'default'), { cmd: 'explorer.exe', args: ['http://x/'], launcher: true });
 });
 
-test('buildOpenBrowserCommand: win32, unrecognized named browser uses the name as-is', () => {
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Some Browser'), { cmd: 'cmd', args: ['/c', 'start', '', 'Some Browser', 'http://x/'], launcher: true });
+test('buildOpenBrowserCommand: win32, unrecognized named browser falls back to the system default', () => {
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Some Browser'), { cmd: 'explorer.exe', args: ['http://x/'], launcher: true });
 });
 
-test('buildOpenBrowserCommand: win32, known browsers resolve to their exe name', () => {
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Google Chrome'), { cmd: 'cmd', args: ['/c', 'start', '', 'chrome.exe', 'http://x/'], launcher: true });
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Firefox'), { cmd: 'cmd', args: ['/c', 'start', '', 'firefox.exe', 'http://x/'], launcher: true });
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Microsoft Edge'), { cmd: 'cmd', args: ['/c', 'start', '', 'msedge.exe', 'http://x/'], launcher: true });
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Brave Browser'), { cmd: 'cmd', args: ['/c', 'start', '', 'brave.exe', 'http://x/'], launcher: true });
+test('buildOpenBrowserCommand: win32, known browsers spawn their fixed exe directly', () => {
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Google Chrome'), { cmd: 'chrome.exe', args: ['http://x/'], launcher: false });
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Firefox'), { cmd: 'firefox.exe', args: ['http://x/'], launcher: false });
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Microsoft Edge'), { cmd: 'msedge.exe', args: ['http://x/'], launcher: false });
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Brave Browser'), { cmd: 'brave.exe', args: ['http://x/'], launcher: false });
 });
 
-test('buildOpenBrowserCommand: win32, a known-on-darwin-only name (Safari, Arc) still falls back to the name as-is', () => {
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Safari'), { cmd: 'cmd', args: ['/c', 'start', '', 'Safari', 'http://x/'], launcher: true });
-  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Arc'), { cmd: 'cmd', args: ['/c', 'start', '', 'Arc', 'http://x/'], launcher: true });
+test('buildOpenBrowserCommand: win32, Darwin-only names fall back to the system default', () => {
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Safari'), { cmd: 'explorer.exe', args: ['http://x/'], launcher: true });
+  assert.deepEqual(buildOpenBrowserCommand('win32', 'http://x/', 'Arc'), { cmd: 'explorer.exe', args: ['http://x/'], launcher: true });
 });
 
 test('buildOpenBrowserCommand: linux runs the browser itself, else xdg-open', () => {
   assert.deepEqual(buildOpenBrowserCommand('linux', 'http://x/', 'default'), { cmd: 'xdg-open', args: ['http://x/'], launcher: true });
   assert.deepEqual(buildOpenBrowserCommand('linux', 'http://x/', 'firefox'), { cmd: 'firefox', args: ['http://x/'], launcher: false });
+});
+
+test('buildOpenBrowserCommand: linux never treats an unknown setting as an executable', () => {
+  assert.deepEqual(buildOpenBrowserCommand('linux', 'http://x/', 'showmd-no-such-browser'), {
+    cmd: 'xdg-open', args: ['http://x/'], launcher: true,
+  });
 });
 
 test('buildOpenBrowserCommand: an unset browser is treated as default', () => {

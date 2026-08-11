@@ -103,16 +103,11 @@ const editTheme = EditorView.theme({
   '.cm-lp-hr': { display: 'inline-block', width: '100%', borderTop: '1px solid var(--line)', verticalAlign: 'middle' },
   '.cm-lp-code': { backgroundColor: 'var(--code-bg)', fontFamily: 'var(--mono)', fontSize: 'var(--code-block-size)', padding: '0 16px' },
   '.cm-lp-lang': { color: 'var(--muted)', fontSize: '12.5px', fontFamily: 'var(--mono)' },
-  // line-height (and padding, never margin) must match body lines: CodeMirror
-  // samples one line for its height estimate, and frontmatter sits at line 1 —
-  // a shorter box there desyncs posAtCoords for the whole document
+  // Frontmatter line height must match body lines to preserve CodeMirror geometry.
   '.cm-lp-fm': { fontFamily: 'var(--mono)', fontSize: '12.5px', color: 'var(--muted)', lineHeight: 'var(--doc-lh)' },
   '.cm-lp-fm span': { fontSize: 'inherit !important', fontWeight: 'inherit !important', fontFamily: 'inherit !important', letterSpacing: '0 !important' },
   '.cm-lp-fm-end': { borderBottom: '1px solid var(--line)', paddingBottom: '16px' },
-  // the blank source line around a block already supplies the gap. Selectors must
-  // outrank `.doc .callout` etc: a margin here collapses out through the widget
-  // and lands in .cm-content, where CodeMirror cannot measure it — its height map
-  // then drifts and posAtCoords sends clicks to the wrong block.
+  // Avoid margins: they escape widgets and corrupt CodeMirror's height map.
   '.cm-lp-embed': { whiteSpace: 'normal' },
   '.doc.cm-lp-embed > *, .cm-lp-math > *, .cm-lp-mermaid > *': { margin: 0 },
   '.cm-lp-math': { textAlign: 'center', whiteSpace: 'normal' },

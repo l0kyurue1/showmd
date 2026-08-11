@@ -14,9 +14,7 @@ process.env.HOME = fakeHome;
 // os.homedir() reads USERPROFILE on windows and ignores HOME
 process.env.USERPROFILE = fakeHome;
 
-// realpath, not just mkdtemp: windows hands back an 8.3 short name here
-// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
-// long filename does not match the short dir it was given
+// Canonicalize Windows temp paths before libuv watches them.
 function tmp(prefix) {
   return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
@@ -72,9 +70,7 @@ test('GET /api/skills/tree: still works with no root (global scope only)', async
   });
 });
 
-// pick-root/setRoot are gone; adding a root to a rootless launcher now only
-// goes through RootManager (POST /api/roots) and is visible via root-scoped
-// routes
+// Rootless launchers add roots only through POST /api/roots.
 test('POST /api/roots: adds a root to a rootless launcher; visible at its own key', async () => {
   const newRoot = tmp('showmd-launcher-newroot-');
   try {
@@ -136,10 +132,7 @@ test('GET /: a server with a root carries no launcher body marker', async () => 
   }
 });
 
-// server-side recents (server/recents.js): its own isolated settings home, so
-// prior tests' boot-time recordings above never leak into these assertions.
-// POST /api/roots records its target too (see test/integration/roots.test.mjs);
-// this file's coverage stays on the boot-time recording path.
+// Isolate Recents and cover boot-time recording; POST recording is tested elsewhere.
 test('recents: a single-root boot records the dir; GET reflects it; delete removes it', async () => {
   const recentsHome = tmp('showmd-recents-home-');
   const prevSettingsHome = process.env.SHOWMD_SETTINGS_HOME;

@@ -21,9 +21,7 @@ let KEY2;
 // realpath: windows hands back an 8.3 short name, which makes libuv abort
 // when a watch event's long filename does not match the dir it was given
 const workDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-smoke-')));
-// keep every shadow repo inside the temp dir; the real home stays untouched.
-// settings home is isolated too, with updateCheck off, so this spawn never
-// makes the one outbound call showmd can make (npm test needs no network)
+// Isolate history/settings and disable the only outbound update check.
 const settingsHome = path.join(workDir, 'settings-home');
 mkdirSync(settingsHome, { recursive: true });
 writeFileSync(path.join(settingsHome, 'settings.json'), JSON.stringify({ updateCheck: false }));
@@ -82,9 +80,7 @@ async function historyNow(url) {
   return res.json();
 }
 
-// the same collector, but it closes as soon as every wanted path has shown up
-// rather than burning the whole window; a slow runner gets a longer ceiling
-// without making the fast case slow
+// Stop collection when every path arrives, retaining a generous slow-runner ceiling.
 function collectSSEUntil(url, wantPaths, ms = 8000) {
   const remaining = new Set(wantPaths);
   return openSSE(url, {
@@ -192,9 +188,7 @@ test('sse event arrives on external file change', async () => {
   console.log(`criterion 5 PASS: sse event arrived in ${elapsed}ms: ${JSON.stringify(event)}`);
 });
 
-// this whole flow builds one growing history on the same file (versioned.md);
-// each step's assertion depends on the entry count the previous step left
-// behind, so it stays one test rather than being split artificially
+// Keep the dependent versioned.md history flow in one test.
 test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async () => {
   const verFile = 'versioned.md';
   const verEnc = encodeURIComponent(verFile);
@@ -337,9 +331,7 @@ test('vendor allowlist: every route 200s with correct content-type', async () =>
 });
 
 test('vendor allowlist: non-allowlisted and traversal attempts rejected 403/404', async () => {
-  // note: a plain '../' in a fetch() URL is collapsed by the WHATWG URL parser
-  // before the request is even sent, so traversal payloads below encode the
-  // slash (%2F) to survive as a literal path segment and reach the server raw
+  // Encode traversal slashes so the URL parser cannot collapse them first.
   const vendorRejected = [
     ['/assets/vendor/chokidar/package.json', [403, 404]],
     ['/assets/vendor/katex/fonts/' + encodeURIComponent('../../../package.json'), [403, 404]],
@@ -384,12 +376,7 @@ test('file-arg mode: second cli instance on a single file lists siblings; no ind
   console.log('concurrency final check PASS: grep for index.lock across both servers\' stderr — no matches');
 });
 
-// "two tabs on two roots, end to end" — proved here as one process (the
-// already-running `child`) holding two roots added via POST /api/roots, each
-// addressable and watched independently. The
-// client's rootKey SSE filter is covered at the unit level (app-boot.test);
-// this proves the server side of that contract: every change event is
-// tagged with the root it actually came from.
+// Prove one process serves and tags events for two independent roots.
 test('two roots on one process: POST /api/roots adds a second root; trees and SSE stay isolated per rootKey', async () => {
   const rootBDir = path.join(workDir, 'root-b');
   mkdirSync(rootBDir, { recursive: true });

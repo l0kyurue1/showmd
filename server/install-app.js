@@ -25,26 +25,15 @@ function deadEntryMessage(cli) {
   return `showmd is no longer installed at ${cli}. Install showmd, then run: showmd install-app`;
 }
 
-// probes a short list of well-known absolute install locations for a
-// replacement showmd before giving up on a launch — a recovery for this one
-// launch, not a repair: the baked path stays wrong until the user reinstalls,
-// so appStatus keeps reporting stale. `withPath` also checks PATH, only
-// where the app's environment can trust it: a .desktop entry inherits
-// the session environment, but the macOS applet's do-shell-script runs under
-// /bin/sh with a bare PATH of /usr/bin:/bin:/usr/sbin:/sbin that never sees
-// /opt/homebrew/bin or /usr/local/bin.
+// Recover one launch from known install paths without repairing the baked path.
+// Linux may trust its session PATH; the macOS applet cannot.
 function unixProbeSnippet(withPath) {
   const candidates = UNIX_PROBE_PATHS.map((p) => `"${p}"`).join(' ');
   const pathCheck = withPath ? `command -v showmd >/dev/null 2>&1 && { command -v showmd; exit 0; }; ` : '';
   return `${pathCheck}for c in ${candidates}; do if [ -x "$c" ]; then printf '%s' "$c"; exit 0; fi; done; printf ''`;
 }
 
-// A stay-open applet, not a shell script in a hand-rolled bundle: macOS reaps a
-// bundled app's whole process tree when its executable exits (verified against
-// nohup, setsid and launchctl submit alike), and it activates an already-running
-// app instead of launching it again — so a script bundle can neither outlive its
-// own app nor notice the second double-click. An applet has the event loop
-// that makes `reopen`, dropped folders and Quit work.
+// A stay-open applet survives launches and handles reopen, dropped folders, and Quit.
 function appleScript(node, cli) {
   const nodeQ = appleQuote(shellQuote(node));
   const cliQ = appleQuote(shellQuote(cli));
@@ -171,11 +160,7 @@ function appDest(opts = {}) {
   return path.join(opts.applicationsDir || applicationsDir(home), BUNDLE);
 }
 
-// SHOWMD_APP_DIR is the cross-platform sibling of SHOWMD_SETTINGS_HOME /
-// SHOWMD_HISTORY_HOME: one env var, highest precedence after an explicit
-// opts seam (test isolation), overriding the platform-default directory the
-// app gets written into. Not SHOWMD_APPLICATIONS_DIR: on Windows the
-// destination is a Start Menu folder, not an Applications folder.
+// SHOWMD_APP_DIR overrides the platform app destination after explicit test seams.
 function winStartMenuDir(opts = {}) {
   const home = opts.home || os.homedir();
   return opts.startMenuDir || process.env.SHOWMD_APP_DIR
@@ -204,9 +189,7 @@ function linuxDataDir(opts = {}) {
   return opts.dataDir || platformDataDir('linux', opts.home || os.homedir());
 }
 
-// win/linux app entries have no version stamp baked into the file itself
-// (unlike macOS's Info.plist), so install time drops a small sidecar next to
-// the generated launch script recording what it was built against
+// Windows and Linux use a sidecar because their launchers carry no version stamp.
 function stampPath(platform, opts = {}) {
   const dataDir = platform === 'win32' ? winDataDir(opts) : linuxDataDir(opts);
   return path.join(dataDir, 'app.json');
@@ -232,10 +215,7 @@ function readPlistString(text, key) {
   return m ? m[1] : null;
 }
 
-// two distinct stale causes, so Settings can report accurately: 'missing'
-// when the baked entry point is gone (moved, uninstalled, channel switch —
-// no version to compare against), 'version' when it's still there but was
-// built against an older package version (a plain upgrade).
+// Distinguish a missing entry point from an outdated app version.
 function darwinAppInfo(dest, currentVersion) {
   try {
     const plist = fs.readFileSync(path.join(dest, 'Contents', 'Info.plist'), 'utf8');
@@ -272,10 +252,7 @@ function appStatus(platform, opts = {}) {
   return { path: null, installed: false, stale: false, staleReason: null, appVersion: null, appMdRegistered: false };
 }
 
-// safe to call on every boot: regenerates an installed-but-stale app in
-// place, but only when we can prove we built it — isOurBundle's Info.plist
-// marker on macOS, our own version stamp elsewhere — so a user's unrelated
-// file sitting at the same reserved path is never touched. Never throws.
+// Repair stale apps only when our marker proves ownership. Never throws.
 function selfHealApp(platform, opts = {}) {
   try {
     const statusFn = opts.appStatusFn || appStatus;
@@ -356,10 +333,7 @@ function installApp(opts = {}) {
     ['CFBundleShortVersionString', version],
     ['CFBundleVersion', version],
     ['ShowMDCliPath', cli],
-    // without these, macOS denies Documents/Desktop/Downloads outright (EPERM)
-    // instead of prompting, and an app that never prompted never shows up in
-    // Privacy & Security to be allowed by hand. osacompile's stock plist
-    // declares every other usage description but not these three.
+    // These descriptions let macOS prompt instead of returning EPERM silently.
     ['NSDocumentsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
     ['NSDesktopFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
     ['NSDownloadsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
@@ -377,18 +351,14 @@ function installApp(opts = {}) {
   return { dest, cli, ephemeral: isEphemeral(cli) };
 }
 
-// every edit above breaks osacompile's ad-hoc signature, and macOS remembers a
-// privacy grant by code identity — an unsealed bundle would have to be allowed
-// again after each install. Best-effort: a bundle that will not sign still runs
+// Re-sign after edits so macOS privacy grants retain the same code identity.
 function reseal(dest, opts = {}) {
   try {
     proc.capture(opts.codesign || 'codesign', ['--force', '--sign', '-', dest], { stdio: 'pipe' });
   } catch {}
 }
 
-// darwin only: warms the folder-picker applet during install so the first
-// "Open folder" click doesn't wait behind osacompile — same build the
-// launcher server's own warmPickerOnStart triggers lazily on first boot
+// Prebuild the macOS picker so the first Open folder does not wait on osacompile.
 function prebakeFolderPicker(opts = {}) {
   const platform = opts.platform || process.platform;
   if (platform !== 'darwin') return;
@@ -398,9 +368,7 @@ function prebakeFolderPicker(opts = {}) {
 
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister';
 
-// The user still has to pick ShowMD via Get Info > Change All — LaunchServices
-// reserves the actual default-handler choice for the user, there is no
-// programmatic API for it without a native module.
+// LaunchServices requires the user to choose the default handler in Get Info.
 function registerMarkdownHandler(opts = {}) {
   const dest = appDest(opts);
   if (!isOurBundle(dest)) throw new Error('ShowMD app is not installed — install it first');

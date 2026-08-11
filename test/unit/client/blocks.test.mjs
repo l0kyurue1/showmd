@@ -13,6 +13,9 @@ const { createBlockRenderer } = await import('../../../client/blocks.js');
 
 const katex = {
   renderToString: (src, opts) => `<span class="katex">${opts.displayMode ? 'D:' : 'I:'}${src}</span>`,
+  render(src, target, opts) {
+    target.innerHTML = this.renderToString(src, opts);
+  },
 };
 const hljs = {
   highlightElement: (el) => { el.dataset.highlighted = el.textContent; },
@@ -21,7 +24,7 @@ const mermaid = {
   initialize: (opts) => { mermaid.initOpts = opts; },
   render: async (id, src) => {
     if (src.startsWith('bad')) throw new Error('parse error');
-    return { svg: `<svg data-id="${id}">${src}</svg>` };
+    return { svg: `<svg xmlns="http://www.w3.org/2000/svg" data-id="${id}">${src}</svg>` };
   },
 };
 
@@ -198,7 +201,7 @@ test('renderBlockInto owns the Mermaid loading state', async () => {
   let finish;
   const waitingMermaid = {
     initialize: () => {},
-    render: () => new Promise((resolve) => { finish = () => resolve({ svg: '<svg>done</svg>' }); }),
+    render: () => new Promise((resolve) => { finish = () => resolve({ svg: '<svg xmlns="http://www.w3.org/2000/svg">done</svg>' }); }),
   };
   const fresh = createBlockRenderer({
     markdown: (source) => source,
@@ -217,7 +220,23 @@ test('renderBlockInto renders Mermaid without exposing SVG to the adapter', asyn
   const fresh = renderer();
   const host = document.createElement('div');
   await fresh.renderBlockInto(host, { kind: 'mermaid', source: 'graph TD; A-->B' });
-  assert.match(host.innerHTML, /^<svg data-id="mmd-\d+">graph TD; A--&gt;B<\/svg>$/);
+  assert.match(host.innerHTML, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" data-id="mmd-\d+">graph TD; A--&gt;B<\/svg>$/);
+});
+
+test('renderBlockInto rejects non-SVG siblings returned by the Mermaid renderer', async () => {
+  const hostileMermaid = {
+    initialize: () => {},
+    render: async () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg">diagram</svg><img src="x" onerror="unsafe()">' }),
+  };
+  const fresh = createBlockRenderer({
+    markdown: (source) => source,
+    load: async () => hostileMermaid,
+    reportError: () => {},
+  });
+  const host = document.createElement('div');
+  await fresh.renderBlockInto(host, { kind: 'mermaid', source: 'graph TD' });
+  assert.equal(host.querySelector('img'), null);
+  assert.ok(host.querySelector('.mermaid-error'));
 });
 
 test('renderBlockInto reports Mermaid failures and resolves with a readable fallback', async () => {
@@ -268,7 +287,7 @@ test('renderBlockInto prevents an older asynchronous render from overwriting its
   const pending = new Map();
   const deferredMermaid = {
     initialize: () => {},
-    render: (id, source) => new Promise((resolve) => pending.set(source, () => resolve({ svg: `<svg>${source}</svg>` }))),
+    render: (id, source) => new Promise((resolve) => pending.set(source, () => resolve({ svg: `<svg xmlns="http://www.w3.org/2000/svg">${source}</svg>` }))),
   };
   const fresh = createBlockRenderer({
     markdown: (source) => source,

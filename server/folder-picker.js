@@ -20,14 +20,8 @@ async function nodeExecFileP(cmd, args, opts) {
 
 const PICKER_APP_VERSION = '0.1.3';
 
-// macOS: a bare osascript process has no LaunchServices identity, so its
-// NSOpenPanel draws on screen but can never become key — clicks don't land
-// and the dialog looks like it dismisses itself. Only a real .app can show a
-// working panel, so the panel lives in a tiny stay-open LSUIElement applet
-// compiled once into Application Support. A pick is signaled by a request
-// file plus `open -g` (launch and reopen both route to checkPick) and
-// answered through a result file; the applet keeps running afterwards, which
-// also swallows the 1-2s AppKit load that made the first dialog slow.
+// A bare osascript cannot focus NSOpenPanel, so macOS uses a stay-open applet.
+// Request/result files support reopen and amortize AppKit startup.
 function buildPickerAppletSource({ requestFile, resultFile }) {
   return `use framework "AppKit"
 use framework "UniformTypeIdentifiers"
@@ -109,9 +103,7 @@ function createFolderPicker({
   const requestFile = path.join(supportDir, 'pick-request');
   const resultFile = path.join(supportDir, 'pick-result');
 
-  // build-once memoization, scoped to this picker instance; the on-disk
-  // PICKER_APP_VERSION marker (checked inside buildApp) already makes
-  // rebuild-skipping robust across separate instances/processes
+  // Memoize per instance; the version marker handles separate processes.
   let build = null;
   function ensureApp() {
     if (!build) build = buildApp().catch((err) => { build = null; throw err; });
@@ -167,18 +159,8 @@ function createFolderPicker({
     throw new Error('picker timed out');
   }
 
-  // plain `choose folder`/`choose file` can't offer both in one panel, so
-  // macOS gets the NSOpenPanel applet above. Filtering must use UTType —
-  // setAllowedFileTypes is dead on current macOS and greys out every file —
-  // and the UTType filter also gates folders despite setCanChooseDirectories,
-  // so public.folder must be listed too.
-  // mode is 'folder' | 'file' | undefined; undefined means the legacy combined
-  // panel (both at once), which only macOS's NSOpenPanel can offer — win32 and
-  // linux never had a combined mode, so undefined defaults to folder there too
-  // startDir opens the panel already inside that folder. macOS records a
-  // per-item privacy grant (com.apple.macl) for whatever the panel returns, so
-  // a folder the server got EPERM on becomes readable once the user confirms
-  // it here — no Privacy pane trip. macOS only; the other pickers ignore it.
+  // UTType must include folders. Undefined mode is combined on macOS and
+  // folder-only elsewhere; startDir lets NSOpenPanel grant blocked paths.
   function pick(mode, startDir) {
     if (platform === 'win32') {
       const script = mode === 'file'
