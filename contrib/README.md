@@ -5,14 +5,14 @@ Linux, run `showmd install-app` (see the main [README](../README.md#desktop-app)
 
 `contrib/` holds lighter-weight extras that `install-app` doesn't cover:
 
-| OS | File | Install |
+| OS | Path | Install |
 |---|---|---|
-| macOS (Raycast) | `raycast-showmd.sh` | Raycast → Extensions → Script Commands → *Add Directories*, select `contrib/`; `raycast-showmd.sh` shows up as "Open in showmd" |
+| macOS, Windows (Raycast) | `raycast/` | A full Raycast extension: six commands, three AI tools, and a menu bar extra (macOS only). See its [README](raycast/README.md) |
 | Windows | `showmd.reg` | Double-click `showmd.reg`, accept the prompt, adds a "showmd" entry to the `.md` right-click menu (no admin required) |
 
-Both need `showmd` on `PATH` (`npm install -g showmd`). Before using the
-Raycast script, run `command -v showmd` and paste the result over the
-placeholder path in the file, GUI apps don't inherit your shell's `PATH`.
+Both need `showmd` on `PATH` (`npm install -g showmd`). The Raycast extension
+also takes an explicit path in its ShowMD Path preference, and falls back to
+`npx -y showmd-cli` when it finds nothing.
 
 ## Homebrew
 

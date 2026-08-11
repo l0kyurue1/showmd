@@ -82,8 +82,9 @@ instead of symlinks. Re-run it after an upgrade to refresh the skill.
 ### More integrations
 
 [`contrib/`](contrib/README.md) holds two extras that `install-app` does not
-cover: a Raycast script command for macOS, and a `.md` right-click entry for
-Windows. Both need `showmd` on your `PATH`.
+cover: a Raycast extension for macOS and Windows, and a `.md` right-click
+entry for Windows. The right-click entry needs `showmd` on your `PATH`; the
+Raycast extension works without it, falling back to `npx -y showmd-cli`.
 
 <img src="contrib/raycast/metadata/0.raycast-showmd-all.png">
 
