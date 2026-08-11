@@ -32,7 +32,8 @@ test('adaptFilesTree normalizes flat files into recursive navigation nodes', () 
       {
         key: 'dir:notes/',
         role: 'dir',
-        label: 'notes/',
+        label: 'notes',
+        labelParts: { prefix: '', name: 'notes' },
         children: [
           { key: 'notes/one.md', role: 'file', label: 'one.md', documentId: 'notes/one.md', children: [], initiallyCollapsed: false },
           { key: 'notes/two.md', role: 'file', label: 'two.md', documentId: 'notes/two.md', children: [], initiallyCollapsed: false },
@@ -41,6 +42,13 @@ test('adaptFilesTree normalizes flat files into recursive navigation nodes', () 
       },
     ],
   });
+});
+
+test('adaptFilesTree splits a multi-segment directory label into prefix and name', () => {
+  const { roots } = adaptFilesTree({ tree: ['docs/superpowers/plans/one.md'] });
+  const header = roots.find((r) => r.role === 'dir');
+  assert.deepEqual(header.labelParts, { prefix: 'docs/superpowers/', name: 'plans' });
+  assert.equal(header.label, 'docs/superpowers/plans');
 });
 
 test('adaptSkillsTree preserves hierarchy, metadata, and first-chain expansion', () => {
@@ -86,6 +94,20 @@ test('a query overrides collapse state', () => {
 
 test('a query that matches nothing yields no rows', () => {
   assert.deepEqual(visibleRows(filesModel, { query: 'zzzznope' }), []);
+});
+
+test('a search row for a file in a directory splits its label into dir and base', () => {
+  const rows = visibleRows(filesModel, { query: 'one' });
+  const row = rows.find((r) => r.id === 'notes/one.md');
+  assert.equal(row.label, 'notes/one.md');
+  assert.deepEqual(row.labelParts, { dir: 'notes/', base: 'one.md' });
+});
+
+test('a search row for a root-level file has no labelParts', () => {
+  const rows = visibleRows(filesModel, { query: 'a.md' });
+  const row = rows.find((r) => r.id === 'a.md');
+  assert.equal(row.label, 'a.md');
+  assert.equal(row.labelParts, null);
 });
 
 test('the current file is marked, and only it', () => {
