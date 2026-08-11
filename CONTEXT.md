@@ -13,6 +13,10 @@ The rootless picker page served when showmd boots with no root: Open Folder, Ope
 Code still says launcher for this one thing (`--launcher`, `launcher.pid`, `showLauncher()`, `.launcher-view`, "launcher mode"). Deliberate: renaming touches installed apps' launch scripts for no behavior gain.
 _Avoid_: launcher in prose and UI copy, where it used to mean the App
 
+**Folder / File / Recents**:
+The only nouns UI copy uses for opened content: the user opens a Folder or File, and both live in Recents. A row's X forgets the folder — it leaves Recents and, when the folder is live in this process, stops updating open tabs (confirmed first). Live-ness itself is never labelled; the watcher is plumbing. Raycast copy brands the app as ShowMD. Architecture words stay in code and docs.
+_Avoid_: project, root, instance, server, watching (in any UI copy)
+
 **Read Mode**:
 The rendered-document view: markdown converted to HTML and enhanced in place. One of the two adapters of the Block Renderer.
 _Avoid_: preview mode, view mode
@@ -46,7 +50,7 @@ The set of CSS custom properties that is the only source of visual values: palet
 _Avoid_: theme variables, design tokens (unless referring to the contract itself)
 
 **Document Store**:
-The module every route goes through to reach a markdown file. It takes a document id (`relPath`, or `key/relPath` across multiple roots) and owns resolving it, refusing to leave its root, writing atomically, suppressing the watcher's echo of our own write, and recording History. No caller outside it handles a filesystem path.
+The module every route goes through to reach a markdown file. Each Space gets its own store: a Root Space's store takes a plain `relPath` id, while Skills and Agents each compose several directories into one store and take a `key/relPath` id. The owning Space's URL (`/r/<rootKey>/…`, `/skills/…`, `/agents/<agentKey>/…`) picks the store; the store then owns resolving the id, refusing to leave its root, writing atomically, suppressing the watcher's echo of our own write, and recording History. No caller outside it handles a filesystem path.
 _Avoid_: file service, repository, fs layer
 
 **Agent Config View**:
@@ -56,3 +60,19 @@ _Avoid_: agent browser, memory viewer, settings view
 **History**:
 The per-file version history kept in a hidden git repository outside the served directory, written on save and readable as diffs. One timeline per file: unpushed history saves on top of the served repo's own commits, each entry tagged with where it came from.
 _Avoid_: backup, undo history, shadow history
+
+**Registry**:
+The per-instance announcement files (`ports/<pid>.json`, one per running showmd process) that external consumers (Raycast, `--launcher`, the shipped skill) read to discover every live server. The server is the registry's only writer: it announces on listen, retracts on close, and sweeps dead pids on boot. A reader trusts a live probe over the file existing. `GET /api/registry` is that probe, served by every live server: it reads the same directory, probes each entry's `/api/version`, and orders the result with `server/protocol.js`'s `orderRegistry` (protocol match, `mode: "shared"`, then configured port, `startedAt`, `instanceId`). A consumer asks whichever server it can reach and takes the first entry; enumeration order and which server answered never change the result, so no consumer re-derives the ordering itself. The legacy single `port.json` is gone; there is no mixed-version fallback.
+_Avoid_: port file, lockfile, primary/isolated (the wire vocabulary is `mode: "shared" | "dedicated"`)
+
+**Capability**:
+A named, versioned feature a process advertises in `/api/version` (`roots-v1`, `spaces-v1`). Consumers connect to processes they did not launch, installed by npm or Homebrew and updated on their own schedules, so they ask what a server can do instead of inferring it from a version number. `server/protocol.js` holds the only list; `KNOWN_CAPABILITY_SET` rejects unknown or duplicated names. A published name is a frozen contract: additive changes stay in `v1`, a breaking change mints `roots-v2`, and a migrating server advertises both. The names carry no ordering, so no consumer may compare or range-check them. The separate `protocol` field versions the wire envelope, never a feature.
+_Avoid_: version check, semver gate, feature flag
+
+**Space**:
+A top-level, URL-addressable area of the app: a Root Space (`/r/<rootKey>/…`, one per open directory), Skills, Agents, Settings, or Home. A process hosts several Spaces at once and can add Root Spaces at runtime (`POST /api/roots`); the Registry still lists one entry per process, not one per Space.
+_Avoid_: instance, server (in extension UI copy)
+
+## Security
+
+`/api/shutdown` shares the loopback and Origin trust model documented at its restart check in server.js: any local process able to reach 127.0.0.1 can stop the server, same as it can restart it. This is accepted for a localhost dev tool, since a local process could reach the served files directly anyway.

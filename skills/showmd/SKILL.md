@@ -11,23 +11,35 @@ stays in sync as you edit the file.
 ## Steps
 
 1. **Check for a running showmd first**, don't start a second one:
-   - `curl -s http://localhost:4321/api/root`: a JSON response like
-     `{"dir":"/path/served"}` means showmd owns port 4321 and tells you
-     which directory it serves; HTML, an error page, or connection refused
-     means some other dev server (or nothing) is there. Don't assume 4321
-     is showmd.
-   - If its `dir` covers the file you need, reuse it.
+   - `curl -s http://localhost:4321/api/registry`: any live showmd on port
+     4321 answers with a JSON array, already ordered by the server itself —
+     the first entry is the one to reuse, whatever port it actually listens
+     on (`actualPort`, which may not be 4321). An empty array (`[]`) means
+     that process exists but has nothing reusable. HTML, an error page, or
+     connection refused means nothing showmd-shaped is on 4321 at all. Never
+     rank or filter entries yourself; take the first one as given.
+   - `curl -s http://localhost:<actualPort>/api/roots`: lists every directory
+     the chosen process already serves, as
+     `{"roots":[{"key":"...","dir":"...","url":"/r/<key>/"}]}`. If one `dir`
+     covers the file you need, reuse it: the file's URL is
+     `http://localhost:<actualPort>` + that root's `url` + the file's path
+     relative to `dir` (e.g. `http://localhost:61234/r/abc123/notes/todo.md`).
 2. **Start one if none is running**, in the background, without stealing focus:
    - `showmd "<dir>" --no-open` when `command -v showmd` finds it. Otherwise
      `npx -y showmd-cli "<dir>" --no-open`, which downloads it from npm first;
      mention that you are doing so.
    - `<dir>` is the folder containing the markdown file(s), always quoted. If
-     4321 is busy, showmd picks a free port itself; read the actual URL from
-     its stdout instead of assuming the port.
-3. **Point the user at the file**:
-   `http://localhost:<port>/<path-relative-to-served-root>.md`
-   You can open it yourself: `open "<url>"` (macOS), `xdg-open "<url>"`
-   (Linux), `start "" "<url>"` (Windows).
+     4321 is busy, showmd picks a free port itself; it prints the file's ready
+     URL as its own second line of stdout. Read that URL instead of assuming
+     a port or a URL shape.
+   - To add `<dir>` to the showmd you found in step 1 instead of starting a
+     second process: `curl -s -X POST http://localhost:<actualPort>/api/roots
+     -H 'content-type: application/json' -d '{"path":"<dir-or-file>"}'`. The
+     response's `url` field (e.g. `/r/abc123/todo.md`) is the file's path;
+     prefix it with `http://localhost:<actualPort>` to get the full URL.
+3. **Point the user at the file** using the URL from whichever step produced
+   it above. You can open it yourself: `open "<url>"` (macOS), `xdg-open
+   "<url>"` (Linux), `start "" "<url>"` (Windows).
 
 ## Notes
 

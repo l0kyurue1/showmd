@@ -57,14 +57,33 @@ Registry entries need no issue first. Anything structural, open one.
 git clone https://github.com/l0kyurue1/showmd.git
 cd showmd
 npm install
-npm test                  # css-guard, unit, integration, e2e, pack guard
+npm test                  # guards, lint, typecheck, unit, integration, platform, e2e
 node bin/cli.js .         # run it against this repo
 ```
 
-`npm run test:unit` is the fast loop to iterate against (no server boot); run the
-full `npm test` before opening a PR.
+`npm run test:unit` is the fast loop to iterate against (no server boot or real
+OS tools); run the full `npm test` before opening a PR.
 
 Single test file: `node --test test/unit/<name>.test.mjs`.
+
+### Test lanes and value
+
+- `test/unit` is the fast unit + component lane. It may use a temporary
+  filesystem or isolated Git repository, but not a ShowMD server, socket,
+  external network, real user state, OS application/tool, or bare sleep.
+- `test/integration` boots the localhost HTTP server and proves behavior across
+  server modules without touching external services or real user state.
+- `test/platform` executes real OS tools and applications. Each case must be
+  explicitly gated to the operating systems that can prove it.
+- `test/e2e` spawns the shipped CLI and is reserved for process/CLI boundaries.
+
+A new test must name a realistic production regression that the current suite
+would miss. Prefer the cheapest boundary that detects it. Do not duplicate
+centralized middleware per endpoint, re-test a pure classifier through a real
+platform install, assert private structure or mock calls without an observable
+outcome, rely on arbitrary sleeps, or retain tests for dead/pass-through code.
+The detailed audit and examples live in
+[`docs/test-audit-2026-08-11.md`](docs/test-audit-2026-08-11.md).
 
 ## Design and color changes
 
