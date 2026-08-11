@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -84,6 +85,7 @@ test('POST /api/restart: broadcasts server-restarting with the saved port to eve
     assert.equal(restarting.rootKey, undefined, 'no rootKey field — an un-updated client must not filter this out');
   } finally {
     server.close();
+    await server.whenClosed();
     process.env.SHOWMD_SETTINGS_HOME = prevHome;
     rmSync(root, { recursive: true, force: true });
   }
@@ -115,6 +117,7 @@ test('POST /api/restart: snapshot carries every RootManager root (including one 
     const res = await fetch(`${base}/api/restart`, { method: 'POST' });
     assert.equal(res.status, 200);
     await closed;
+    await server.whenClosed();
 
     assert.equal(exitCode, 0);
     assert.equal(launches.length, 1);
@@ -168,6 +171,7 @@ test('boot with a valid, matching restart handoff adopts its roots and consumes 
   } finally {
     delete process.env.SHOWMD_RESTART_HANDOFF;
     server.close();
+    await server.whenClosed();
     rmSync(rootA, { recursive: true, force: true });
     rmSync(rootB, { recursive: true, force: true });
   }
@@ -194,6 +198,7 @@ test('boot with a wrong-target restart handoff boots cleanly with zero roots and
   } finally {
     delete process.env.SHOWMD_RESTART_HANDOFF;
     server.close();
+    await server.whenClosed();
     rmSync(snapshotPath, { force: true });
   }
 });
@@ -219,6 +224,7 @@ test('boot with an expired restart handoff boots cleanly with zero roots, no cra
   } finally {
     delete process.env.SHOWMD_RESTART_HANDOFF;
     server.close();
+    await server.whenClosed();
     rmSync(snapshotPath, { force: true });
   }
 });
@@ -235,5 +241,6 @@ test('boot with a missing restart handoff boots cleanly with zero roots, no cras
   } finally {
     delete process.env.SHOWMD_RESTART_HANDOFF;
     server.close();
+    await server.whenClosed();
   }
 });

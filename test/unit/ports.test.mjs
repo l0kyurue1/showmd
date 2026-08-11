@@ -27,6 +27,23 @@ test('two instances announce, one retracts, the other stays listed', async () =>
   retract(333);
 });
 
+test('an old registration cannot retract a newer port for the same pid', async () => {
+  const oldRegistration = await announce(4321, 444);
+  const currentRegistration = await announce(4322, 444);
+
+  assert.deepEqual(oldRegistration, {
+    file: path.join(portsDir(), '444.json'),
+    port: 4321,
+    pid: 444,
+  });
+
+  retract(oldRegistration);
+
+  assert.deepEqual(await list(), [{ port: 4322, pid: 444 }]);
+  retract(currentRegistration);
+  assert.deepEqual(await list(), []);
+});
+
 test('a stale pid (process no longer running) is swept on the next announce', async () => {
   const deadPid = 999999;
   await announce(4321, deadPid);

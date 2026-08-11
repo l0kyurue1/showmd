@@ -63,20 +63,24 @@ test('cli started, announced agent config', () => {
   console.log('criterion 0 PASS: cli started, announced agent config\n' + stdout.trim());
 });
 
-test('boot HTML marks the client to open straight into the Agents view', async () => {
-  const html = await (await fetch(`${BASE}/`)).text();
-  assert.ok(html.includes('"view":"agents"'), 'boot data tells the client to boot into agents mode');
-  console.log('criterion 1 PASS: boot HTML carries view:"agents"');
+test('the printed URL is the Agents space, and its boot data carries that route', async () => {
+  assert.ok(stdout.includes(`${BASE}/agents/claude/`), `cli prints the agents URL: ${stdout}`);
+  const html = await (await fetch(`${BASE}/agents/claude/`)).text();
+  assert.ok(html.includes('"space":"agents"'), 'boot data carries the agents route');
+  assert.ok(html.includes('"agentKey":"claude"'), 'boot data names the agent');
+  console.log('criterion 1 PASS: /agents/claude/ boots into the Agents space');
 });
 
-test('/api/tree?view=agents returns the claude agent groups', async () => {
-  const tree = await (await fetch(`${BASE}/api/tree?view=agents`)).json();
+test('GET /api/agents/claude/tree returns the claude agent groups', async () => {
+  const tree = await (await fetch(`${BASE}/api/agents/claude/tree`)).json();
   assert.equal(tree.agent, 'claude');
   assert.ok(tree.detected, 'fake HOME/.claude is detected');
   const instructions = tree.groups.find((g) => g.name === 'Instructions');
   assert.ok(instructions, 'tree includes an Instructions group');
-  assert.ok(instructions.files.some((f) => f.id === 'claude-home/CLAUDE.md'), 'tree includes the fake CLAUDE.md');
-  console.log(`criterion 2 PASS: /api/tree?view=agents returns claude groups: ${JSON.stringify(tree.groups.map((g) => g.name))}`);
+  const claudeMd = instructions.files.find((f) => f.id === 'claude-home/CLAUDE.md');
+  assert.ok(claudeMd, 'tree includes the fake CLAUDE.md');
+  assert.equal(claudeMd.href, '/agents/claude/claude-home/CLAUDE.md');
+  console.log(`criterion 2 PASS: agent tree groups: ${JSON.stringify(tree.groups.map((g) => g.name))}`);
 });
 
 test('cli exits cleanly on kill', async () => {

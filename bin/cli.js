@@ -6,16 +6,21 @@ const http = require('node:http');
 const proc = require('../server/proc.js');
 const { createServer } = require('../server/server.js');
 const { classifyRootTarget } = require('../server/documents.js');
+const { identifyRoot } = require('../server/root-identity.js');
+const { formatRouteContext } = require('../server/route-context.js');
+const { discoverRegistry } = require('../server/registry.js');
+const { CAPABILITIES, DEFAULT_MODE } = require('../server/protocol.js');
 const VERSION = require('../package.json').version;
 
 function parseArgs(argv, defaultPort = 4321) {
-  const args = { port: defaultPort, open: true, portExplicit: false, launcher: false };
+  const args = { port: defaultPort, open: true, portExplicit: false, launcher: false, dedicated: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--port') { args.port = Number(argv[++i]); args.portExplicit = true; }
     else if (a.startsWith('--port=')) { args.port = Number(a.slice('--port='.length)); args.portExplicit = true; }
     else if (a === '--no-open') args.open = false;
+    else if (a === '--new' || a === '--dedicated') args.dedicated = true;
     // internal, Helper-only: not in --help. Boots with no root (server.js's
     // launcher mode) instead of resolving a target dir/file below.
     else if (a === '--launcher') args.launcher = true;
@@ -65,6 +70,57 @@ function probeShowmd(port, { timeout = 300 } = {}) {
   });
 }
 
+// server/registry.js probes the Registry and applies server/protocol.js's
+// orderRegistry; this is the same discovery a live server answers at
+// GET /api/registry, just run in-process since bin/cli.js already needs it
+// before any server may exist yet to ask (the bootstrap case).
+async function discoverPrimary(configuredPort) {
+  const entries = await discoverRegistry({ configuredPort });
+  return entries[0] || null;
+}
+
+function postAddRoot(port, targetPath) {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify({ path: targetPath });
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/api/roots', method: 'POST', timeout: 2000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, body: JSON.parse(data) });
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(null));
+    req.end(payload);
+  });
+}
+
+// the only path that boots no server of its own: a live shared server took
+// the target and printed its own URL, so the caller exits without listen()ing.
+// A dead/unreachable candidate falls back to booting our own shared server; an
+// ancestor_conflict (409) is distinguished so the caller falls back to a
+// dedicated boot instead (the plan's ancestor-overlap fallback), not another
+// shared server racing for the same registry slot.
+async function attemptReuse(target, configuredPort, args, browser) {
+  const found = await discoverPrimary(configuredPort);
+  if (!found) return { handled: false, conflict: false };
+  const added = await postAddRoot(found.actualPort, target);
+  if (!added) return { handled: false, conflict: false };
+  if (added.status === 409) return { handled: false, conflict: true };
+  if (added.status !== 200) return { handled: false, conflict: false };
+  const url = `http://127.0.0.1:${found.actualPort}${added.body.url}`;
+  console.log(url);
+  if (args.open) openBrowser(url, browser);
+  return { handled: true, conflict: false };
+}
+
 // netstat's STATE column is localized ("ESCUCHANDO"), so the listener is found
 // by local address: an accepted connection to it belongs to the same process
 function parseNetstatPid(output, port) {
@@ -93,7 +149,25 @@ function findPidOnPort(port) {
   }
 }
 
-module.exports = { resolveSkillsMode, formatPortWarning, probeShowmd, findPidOnPort, parseNetstatPid, buildOpenBrowserCommand, openBrowser };
+// resolution detail for buildOpenBrowserCommand below: the settings picker
+// (server/settings-platform.js's detectBrowsersDarwin) produces these exact
+// .app display names. `open -a <name>` breaks if the app is renamed or the
+// display name is localized; a bundle id survives both, so known names use
+// `open -b` instead. Unrecognized names (including anything hand-typed) fall
+// through to the old `-a`/exe-name behavior, which still works for them.
+const BROWSER_IDS = {
+  'Google Chrome': { darwin: 'com.google.Chrome', win32: 'chrome.exe' },
+  Safari: { darwin: 'com.apple.Safari' },
+  Firefox: { darwin: 'org.mozilla.firefox', win32: 'firefox.exe' },
+  'Microsoft Edge': { darwin: 'com.microsoft.edgemac', win32: 'msedge.exe' },
+  Arc: { darwin: 'company.thebrowser.Browser' },
+  'Brave Browser': { darwin: 'com.brave.Browser', win32: 'brave.exe' },
+};
+
+module.exports = {
+  resolveSkillsMode, formatPortWarning, probeShowmd, findPidOnPort, parseNetstatPid,
+  buildOpenBrowserCommand, openBrowser, discoverPrimary, postAddRoot, attemptReuse,
+};
 
 // top-level return keeps `require` of this file (tests) from running the CLI
 if (require.main !== module) return;
@@ -110,6 +184,7 @@ Usage:
 
 Options:
   --port <n>     port to listen on (default 4321, falls back to a free port)
+  --new          start a dedicated server instead of reusing the shared one
   --no-open      don't launch the browser
   -h, --help     show this help
   -v, --version  print version`;
@@ -125,8 +200,15 @@ Options:
 // something; a named browser on linux is the browser itself and exits on quit
 function buildOpenBrowserCommand(platform, url, browser) {
   const named = browser && browser !== 'default';
-  if (platform === 'darwin') return { cmd: 'open', args: named ? ['-a', browser, url] : [url], launcher: true };
-  if (platform === 'win32') return { cmd: 'cmd', args: named ? ['/c', 'start', '', browser, url] : ['/c', 'start', '', url], launcher: true };
+  const known = named ? BROWSER_IDS[browser] : null;
+  if (platform === 'darwin') {
+    if (known && known.darwin) return { cmd: 'open', args: ['-b', known.darwin, url], launcher: true };
+    return { cmd: 'open', args: named ? ['-a', browser, url] : [url], launcher: true };
+  }
+  if (platform === 'win32') {
+    if (known && known.win32) return { cmd: 'cmd', args: ['/c', 'start', '', known.win32, url], launcher: true };
+    return { cmd: 'cmd', args: named ? ['/c', 'start', '', browser, url] : ['/c', 'start', '', url], launcher: true };
+  }
   return named ? { cmd: browser, args: [url], launcher: false } : { cmd: 'xdg-open', args: [url], launcher: true };
 }
 
@@ -146,7 +228,7 @@ const BIND_RETRIES = 20;
 const BIND_RETRY_MS = 100;
 // trust boundary: every listen() below binds 127.0.0.1, never 0.0.0.0 — the
 // served file tree must not reach the network
-function serve(server, args, urlPath, describe, browser) {
+function serve(server, args, urlPath, describe, browser, { reuseTarget, configuredPort } = {}) {
   function onListening() {
     const actualPort = server.address().port;
     const url = `http://127.0.0.1:${actualPort}/${urlPath}`;
@@ -154,17 +236,23 @@ function serve(server, args, urlPath, describe, browser) {
     console.log(url);
     if (args.open) openBrowser(url, browser);
   }
+  // Ctrl+C / kill without this go straight to Node's default handling, which
+  // exits without emitting 'close' — server.js's registry retraction depends on it
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      server.close(() => server.whenClosed().then(() => process.exit(0)));
+      server.closeAllConnections();
+    });
+  }
   let retries = 0;
   let stalePortTaken = false;
   // a restarting server's replacement can start before the old process has
   // fully released the port, so a same-port EADDRINUSE retries before giving up
-  server.on('error', (err) => {
-    if (err.code !== 'EADDRINUSE') throw err;
-    if (retries < BIND_RETRIES) {
-      retries++;
-      setTimeout(() => server.listen(args.port, '127.0.0.1'), BIND_RETRY_MS);
-      return;
-    }
+  // legacy takeover path: probes the exact colliding port for an outdated,
+  // unregistered showmd (never went through the Registry) and reclaims it;
+  // preserved as the fallback once a registry-based reuse attempt (below)
+  // finds no live compatible shared server to hand the target to
+  function afterBindCollision() {
     if (args.portExplicit) {
       console.error(`showmd: port ${args.port} is already in use`);
       process.exit(1);
@@ -188,6 +276,26 @@ function serve(server, args, urlPath, describe, browser) {
       // the banner twice
       server.listen(0, '127.0.0.1');
     });
+  }
+
+  server.on('error', (err) => {
+    if (err.code !== 'EADDRINUSE') throw err;
+    if (retries < BIND_RETRIES) {
+      retries++;
+      setTimeout(() => server.listen(args.port, '127.0.0.1'), BIND_RETRY_MS);
+      return;
+    }
+    // concurrent cold-start race (CLI and concurrent start, step 7): someone
+    // else won the bind since our own discovery probe came up empty. Re-probe
+    // and hand the target to the winner instead of taking over its port.
+    if (reuseTarget) {
+      attemptReuse(reuseTarget, configuredPort, args, browser).then(({ handled }) => {
+        if (handled) { process.exit(0); return; }
+        afterBindCollision();
+      });
+      return;
+    }
+    afterBindCollision();
   });
   server.listen(args.port, '127.0.0.1', onListening);
 }
@@ -246,14 +354,20 @@ if (process.argv[2] === 'skills') {
     const { mode, projectDirs } = resolveSkillsMode(rest, cwd);
 
     const roots = skillsMod.discoverSkillRoots({ mode, projectDirs });
-
     if (!roots.length) {
       console.error('showmd: no skill directories found');
       process.exit(1);
     }
+    // named projects become one immutable in-memory SkillsContext, so the URL
+    // this prints stays restorable for as long as the process lives
+    const { newContextKey } = require('../server/spaces.js');
+    const contexts = mode === 'project' ? [{ key: newContextKey(), projectDirs }] : [];
+    const urlPath = mode === 'project' ? `skills/?context=${contexts[0].key}`
+      : mode === 'all' ? 'skills/?scope=all' : 'skills/';
+
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-    const server = createServer(roots, { skillsMode: mode === 'project' ? 'project' : undefined });
-    serve(server, args, '', () => `showmd serving ${roots.length} skill root(s): ${roots.map((r) => r.key).join(', ')}`, stored.browser);
+    const server = createServer(null, { skillsContexts: contexts });
+    serve(server, args, urlPath, () => `showmd serving ${roots.length} skill root(s): ${roots.map((r) => r.key).join(', ')}`, stored.browser);
   })();
   return;
 }
@@ -263,8 +377,8 @@ if (process.argv[2] === 'agents') {
     const stored = await require('../server/settings.js').readSettings();
     const { args } = parseArgs(process.argv.slice(3), stored.port);
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-    const server = createServer(null, { warmPickerOnStart: true, bootView: 'agents' });
-    serve(server, args, '', () => 'showmd serving agent config', stored.browser);
+    const server = createServer(null, { warmPickerOnStart: true });
+    serve(server, args, 'agents/claude/', () => 'showmd serving agent config', stored.browser);
   })();
   return;
 }
@@ -275,11 +389,13 @@ if (process.argv[2] === 'agents') {
 
   if (args.launcher) {
     // every app launch runs this, so reuse lives here rather than in each
-    // platform's launcher script: a same-version launcher already on the port
-    // just gets its tab opened; a stale one is killed by serve()'s takeover
-    const live = args.portExplicit ? null : await probeShowmd(args.port);
-    if (live && live.launcher && live.version === VERSION) {
-      const url = `http://127.0.0.1:${args.port}/`;
+    // platform's launcher script: the Registry's first entry gets its tab
+    // opened, whether it is a rootless launcher or an already-rooted shared
+    // server (both serve Home at '/'); a stale, unregistered showmd on the
+    // configured port is still killed by serve()'s takeover below
+    const found = args.portExplicit ? null : await discoverPrimary(args.port);
+    if (found && found.capabilities.includes(CAPABILITIES.ROOTS_V1)) {
+      const url = `http://127.0.0.1:${found.actualPort}/`;
       console.log(url);
       if (args.open) openBrowser(url, stored.browser);
       return;
@@ -299,9 +415,33 @@ if (process.argv[2] === 'agents') {
   }
 
   const { dir: root, doc } = classified;
-  const urlPath = doc ? encodeURIComponent(doc) : '';
+
+  // CLI and concurrent start, steps 1-5: asking for nothing dedicated means
+  // this invocation is a capability client first, a server second. --port,
+  // --new/--dedicated, and an ancestor-overlap 409 below all skip straight to
+  // booting our own (mode: dedicated) process instead.
+  let wantsDedicated = args.portExplicit || args.dedicated;
+  if (!wantsDedicated) {
+    const reused = await attemptReuse(target, args.port, args, stored.browser);
+    if (reused.handled) return;
+    // an ancestor overlap is a real conflict with a live shared server's root,
+    // not an absent one: booting another shared server here would just race
+    // the same registry slot, so this invocation becomes dedicated instead
+    if (reused.conflict) wantsDedicated = true;
+  }
+
+  // Root Space is addressed by key, not by the boot-time path (conflict #23):
+  // keyFor is a deterministic hash of the realpath, so the URL can be composed
+  // before the RootManager finishes registering the same root under it.
+  const { key } = await identifyRoot(root);
+  const routeContext = { space: 'root', rootKey: key, ...(doc ? { documentPath: doc } : {}) };
+  const urlPath = formatRouteContext(routeContext).replace(/^\//, '');
 
   require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-  const server = createServer(root, { warmPickerOnStart: true, initialDoc: doc });
-  serve(server, args, urlPath, () => `showmd serving ${root}`, stored.browser);
+  const mode = wantsDedicated ? 'dedicated' : DEFAULT_MODE;
+  const server = createServer(root, { warmPickerOnStart: true, initialDoc: doc, mode });
+  serve(server, args, urlPath, () => `showmd serving ${root}`, stored.browser, {
+    reuseTarget: wantsDedicated ? null : target,
+    configuredPort: args.port,
+  });
 })();

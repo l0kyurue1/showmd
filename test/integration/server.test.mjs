@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,7 @@ async function withServer(root, fn) {
     await fn(base, revealed, key);
   } finally {
     server.close();
+    await server.whenClosed();
   }
 }
 
@@ -173,6 +175,7 @@ test('GET /api/version: a rootless (launcher) server marks itself reusable', asy
     assert.equal(body.launcher, true);
   } finally {
     server.close();
+    await server.whenClosed();
   }
 });
 
@@ -313,6 +316,7 @@ async function withInstallServer(fn, opts = {}) {
     await fn(base);
   } finally {
     server.close();
+    await server.whenClosed();
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -432,6 +436,7 @@ test('GET /api/settings: appInstalled/appPath come from the injected appStatusFn
       assert.equal(body.appPath, '/fake/ShowMD.app');
     } finally {
       server.close();
+      await server.whenClosed();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -450,6 +455,7 @@ test('GET /api/settings: mdHandlerDefault comes from the injected mdHandlerDefau
       assert.equal(body.mdHandlerDefault, true);
     } finally {
       server.close();
+      await server.whenClosed();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -467,6 +473,7 @@ test('GET /api/settings: mdHandlerDefault defaults to false without the seam (no
       assert.equal(body.mdHandlerDefault, false);
     } finally {
       server.close();
+      await server.whenClosed();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -499,6 +506,7 @@ test('POST /api/register-markdown: opens Get Info on the root\'s first .md file 
     assert.equal(openedPath, path.join(root, 'a.md'));
   } finally {
     server.close();
+    await server.whenClosed();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -517,6 +525,7 @@ test('POST /api/register-markdown: a failing opener still reports 200 with opene
     assert.deepEqual(await res.json(), { ok: true, dest: '/fake/ShowMD.app', opened: false });
   } finally {
     server.close();
+    await server.whenClosed();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -601,6 +610,7 @@ test('POST /api/shutdown: responds 200, stops the server, and removes its regist
     assert.deepEqual(await res.json(), { ok: true });
 
     await closed;
+    await server.whenClosed();
     assert.equal(exitCode, 0);
     await assert.rejects(() => fetch(base), 'server no longer accepts connections');
     assert.ok(await waitForGone(announceFile), 'registry entry removed after shutdown');
@@ -626,6 +636,7 @@ test('POST /api/shutdown: two concurrent requests only close/exit once', async (
     if (res2) assert.equal(res2.status, 200);
 
     await closed;
+    await server.whenClosed();
     assert.equal(exitCalls, 1, 'the second concurrent call is a no-op');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -644,6 +655,7 @@ test('per-instance ports/<pid>.json: announced on listen with {port, pid}, retra
     assert.deepEqual(await list(), [{ port: server.address().port, pid: process.pid }]);
   } finally {
     server.close();
+    await server.whenClosed();
     assert.ok(await waitForGone(announceFile), 'per-instance file removed on close');
     rmSync(root, { recursive: true, force: true });
   }

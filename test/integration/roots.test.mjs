@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,6 +21,7 @@ async function withServer(root, fn, extra = {}) {
     await fn(base);
   } finally {
     server.close();
+    await server.whenClosed();
   }
 }
 
@@ -179,7 +181,9 @@ test('POST /api/roots: a file nested under an existing root scopes to its parent
       const { status, body } = await postRoot(base, filePath);
       assert.equal(status, 200);
       assert.equal(body.root.dir, root);
-      assert.equal(body.url, `/r/${body.root.key}/docs/a.md`);
+      assert.equal(body.url, `/r/${body.root.key}/docs/a.md?scope=docs`);
+      const scopedTree = await (await fetch(`${base}/api/roots/${body.root.key}/tree?scope=docs`)).json();
+      assert.deepEqual(scopedTree, ['docs/a.md']);
     });
   } finally {
     rmSync(root, { recursive: true, force: true });

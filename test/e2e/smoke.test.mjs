@@ -12,8 +12,10 @@ const PROJECT = path.resolve(HERE, '..', '..');
 // whatever else the machine (or a parallel CI job) already holds
 let PORT;
 let BASE;
+let KEY;
 let PORT2;
 let BASE2;
+let KEY2;
 
 // realpath: windows hands back an 8.3 short name, which makes libuv abort
 // when a watch event's long filename does not match the dir it was given
@@ -130,11 +132,18 @@ test.before(async () => {
   PORT = await waitForPort(() => stdout);
   BASE = `http://127.0.0.1:${PORT}`;
   await waitForServer(`${BASE}/`);
+  KEY = (await (await fetch(`${BASE}/api/roots`)).json()).roots[0].key;
 });
 
-test.after(() => {
-  child.kill();
-  if (child2) child2.kill();
+async function killAndWait(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  const exited = new Promise((resolve) => proc.once('exit', resolve));
+  proc.kill();
+  await exited;
+}
+
+test.after(async () => {
+  await Promise.all([killAndWait(child), killAndWait(child2)]);
   rmSync(workDir, { recursive: true, force: true });
 });
 
@@ -157,48 +166,48 @@ test('socket table shows 127.0.0.1 binding, not wildcard', () => {
   console.log('criterion 2 PASS: socket table shows 127.0.0.1 binding\n' + out.trim());
 });
 
-test('/, /api/tree, /api/raw serve ok; traversal rejected 403', async () => {
+test('/, root tree, root raw serve ok; traversal rejected 403', async () => {
   const rootRes = await fetch(`${BASE}/`);
   assert.equal(rootRes.status, 200);
   const rootHtml = await rootRes.text();
   assert.ok(rootHtml.includes('<title>showmd</title>'), 'root serves app shell');
 
-  const treeRes = await fetch(`${BASE}/api/tree`);
+  const treeRes = await fetch(`${BASE}/api/roots/${KEY}/tree`);
   assert.equal(treeRes.status, 200);
   const tree = await treeRes.json();
   assert.ok(tree.includes('hello.md'));
   assert.ok(tree.includes('notes/ideas.md'));
 
-  const rawRes = await fetch(`${BASE}/api/raw?path=hello.md`);
+  const rawRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=hello.md`);
   assert.equal(rawRes.status, 200);
   const rawText = await rawRes.text();
   assert.ok(rawText.includes('# Hello'));
 
-  const traversalRes = await fetch(`${BASE}/api/raw?path=../outside/secret.md`);
+  const traversalRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=../outside/secret.md`);
   assert.equal(traversalRes.status, 403);
-  console.log('criterion 3 PASS: /, /api/tree, /api/raw ok; traversal rejected 403');
+  console.log('criterion 3 PASS: /, root tree, root raw ok; traversal rejected 403');
 });
 
 test('PUT roundtrip — 204, file on disk updated, GET returns new content', async () => {
   const newContent = '# Hello (edited)\n\nUpdated via PUT.\n';
-  const putRes = await fetch(`${BASE}/api/raw?path=hello.md`, { method: 'PUT', body: newContent });
+  const putRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=hello.md`, { method: 'PUT', body: newContent });
   assert.equal(putRes.status, 204);
   assert.equal(readFileSync(helloPath, 'utf8'), newContent, 'file on disk updated');
-  const getAfterPut = await fetch(`${BASE}/api/raw?path=hello.md`);
+  const getAfterPut = await fetch(`${BASE}/api/roots/${KEY}/raw?path=hello.md`);
   assert.equal(await getAfterPut.text(), newContent, 'GET reflects the new content');
   console.log('criterion 4 PASS: PUT roundtrip — 204, file on disk updated, GET returns new content');
 });
 
 test('PUT traversal (plain + URL-encoded) rejected 403', async () => {
-  const putTraversalRes = await fetch(`${BASE}/api/raw?path=../outside/secret.md`, { method: 'PUT', body: '# hack\n' });
+  const putTraversalRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=../outside/secret.md`, { method: 'PUT', body: '# hack\n' });
   assert.equal(putTraversalRes.status, 403);
-  const putTraversalEncodedRes = await fetch(`${BASE}/api/raw?path=..%2Foutside%2Fsecret.md`, { method: 'PUT', body: '# hack\n' });
+  const putTraversalEncodedRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=..%2Foutside%2Fsecret.md`, { method: 'PUT', body: '# hack\n' });
   assert.equal(putTraversalEncodedRes.status, 403);
   console.log('criterion 5 PASS: PUT traversal (plain + URL-encoded) rejected 403');
 });
 
 test('PUT to non-.md rejected 403', async () => {
-  const putNonMdRes = await fetch(`${BASE}/api/raw?path=hello.txt`, { method: 'PUT', body: 'not markdown' });
+  const putNonMdRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=hello.txt`, { method: 'PUT', body: 'not markdown' });
   assert.equal(putNonMdRes.status, 403);
   console.log('criterion 6 PASS: PUT to non-.md rejected 403');
 });
@@ -240,43 +249,43 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
   const verEnc = encodeURIComponent(verFile);
   const verPath = path.join(servedRoot, verFile);
 
-  const vPut1 = await fetch(`${BASE}/api/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n' });
+  const vPut1 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n' });
   assert.equal(vPut1.status, 204);
-  let hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 1);
+  let hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 1);
   assert.equal(hist.length, 1, 'one entry after first PUT');
   assert.equal(hist[0].source, 'user');
   assert.ok(hist[0].adds > 0 && hist[0].dels === 0, 'plausible adds/dels');
   console.log(`M3 criterion 1 PASS (a): PUT save -> 1 history entry: ${JSON.stringify(hist[0])}`);
 
   appendFileSync(verPath, 'external addition\n');
-  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 2);
+  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 2);
   assert.equal(hist.length, 2, 'external edit adds a second entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 1 PASS (b): external edit -> new entry source=external: ${JSON.stringify(hist[0])}`);
 
-  const vPut2 = await fetch(`${BASE}/api/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n' });
+  const vPut2 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n' });
   assert.equal(vPut2.status, 204);
   await new Promise((r) => setTimeout(r, 200));
   await new Promise((r) => setTimeout(r, 2000));
-  const vPut3 = await fetch(`${BASE}/api/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n\nthird\n' });
+  const vPut3 = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${verEnc}`, { method: 'PUT', body: '# V\n\nfirst\n\nsecond\n\nthird\n' });
   assert.equal(vPut3.status, 204);
   await new Promise((r) => setTimeout(r, 200));
-  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 3);
+  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 3);
   assert.equal(hist.length, 3, `two PUTs ~2s apart amend into one new user entry, got ${JSON.stringify(hist.map((e) => `${e.source}@${e.ts}`))}`);
   assert.equal(hist[0].source, 'user');
   console.log(`M3 criterion 2 PASS (amend): two PUTs 2s apart -> still one user entry, total=${hist.length}`);
 
   appendFileSync(verPath, 'another external edit\n');
-  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, 4);
+  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, 4);
   assert.equal(hist.length, 4, 'external edit after amend window breaks it into a new entry');
   assert.equal(hist[0].source, 'external');
   console.log(`M3 criterion 2 PASS (source break): external edit ends amend window, total=${hist.length}`);
 
-  const diffRes = await fetch(`${BASE}/api/diff?path=${verEnc}&rev=${hist[0].rev}`);
+  const diffRes = await fetch(`${BASE}/api/roots/${KEY}/diff?path=${verEnc}&rev=${hist[0].rev}`);
   assert.equal(diffRes.status, 200);
   const diffText = await diffRes.text();
   assert.ok(diffText.includes('+another external edit'), 'diff contains the changed line');
-  console.log('M3 criterion 3 PASS: /api/diff returns a unified diff containing the changed line');
+  console.log('M3 criterion 3 PASS: root diff returns a unified diff containing the changed line');
 
   const oldestRev = hist[hist.length - 1].rev;
   const sseController2 = new AbortController();
@@ -288,12 +297,12 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
       const { done, value } = await reader.read();
       if (done) return null;
       buf += decoder.decode(value, { stream: true });
-      const match = buf.match(new RegExp(`data: (\\{"path":"${verFile}"[^}]*\\})`));
+      const match = buf.match(new RegExp(`data: (\\{[^\\n]*"path":"${verFile}"[^}]*\\})`));
       if (match) return JSON.parse(match[1]);
     }
   });
   await new Promise((r) => setTimeout(r, 200));
-  const restoreRes = await fetch(`${BASE}/api/restore?path=${verEnc}&rev=${oldestRev}`, { method: 'POST' });
+  const restoreRes = await fetch(`${BASE}/api/roots/${KEY}/restore?path=${verEnc}&rev=${oldestRev}`, { method: 'POST' });
   assert.equal(restoreRes.status, 204);
   const restoreEvent = await Promise.race([
     ssePromise2,
@@ -302,16 +311,16 @@ test('versioned.md: PUT/external/amend/diff/restore/bad-rev history flow', async
   sseController2.abort();
   assert.ok(restoreEvent, 'sse event received for restore');
   assert.equal(readFileSync(verPath, 'utf8'), '# V\n\nfirst\n', 'file on disk matches restored content');
-  hist = await historyOfAtLeast(`${BASE}/api/history?path=${verEnc}`, hist.length + 1);
+  hist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${verEnc}`, hist.length + 1);
   assert.equal(hist[0].source, 'restore', 'newest entry is a restore commit');
   console.log('M3 criterion 4 PASS: restore -> disk content matches (cat proof above), SSE event fired, history gained a restore entry: ' + JSON.stringify(restoreEvent));
 
   // the full bad-rev list is unit-covered in test/unit/documents.test.mjs; one
   // representative case here is enough to prove the API wires it up end to end
   const badRev = '../x';
-  const dRes = await fetch(`${BASE}/api/diff?path=${verEnc}&rev=${encodeURIComponent(badRev)}`);
+  const dRes = await fetch(`${BASE}/api/roots/${KEY}/diff?path=${verEnc}&rev=${encodeURIComponent(badRev)}`);
   assert.equal(dRes.status, 400, `diff rejects rev=${badRev}`);
-  const rRes = await fetch(`${BASE}/api/restore?path=${verEnc}&rev=${encodeURIComponent(badRev)}`, { method: 'POST' });
+  const rRes = await fetch(`${BASE}/api/roots/${KEY}/restore?path=${verEnc}&rev=${encodeURIComponent(badRev)}`, { method: 'POST' });
   assert.equal(rRes.status, 400, `restore rejects rev=${badRev}`);
   console.log(`M3 criterion 6 PASS: invalid rev format (${badRev}) rejected 400`);
 });
@@ -320,12 +329,12 @@ test('concurrent double-PUT is safe: one clean user history entry, no index.lock
   const racePath = 'concurrent-race.md';
   const raceEnc = encodeURIComponent(racePath);
   const [race1, race2] = await Promise.all([
-    fetch(`${BASE}/api/raw?path=${raceEnc}`, { method: 'PUT', body: '# race\n\nattempt one\n' }),
-    fetch(`${BASE}/api/raw?path=${raceEnc}`, { method: 'PUT', body: '# race\n\nattempt two\n' }),
+    fetch(`${BASE}/api/roots/${KEY}/raw?path=${raceEnc}`, { method: 'PUT', body: '# race\n\nattempt one\n' }),
+    fetch(`${BASE}/api/roots/${KEY}/raw?path=${raceEnc}`, { method: 'PUT', body: '# race\n\nattempt two\n' }),
   ]);
   assert.ok(race1.status >= 200 && race1.status < 300, `race1 status ${race1.status}`);
   assert.ok(race2.status >= 200 && race2.status < 300, `race2 status ${race2.status}`);
-  const raceHist = await historyOfAtLeast(`${BASE}/api/history?path=${raceEnc}`, 1);
+  const raceHist = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${raceEnc}`, 1);
   assert.equal(raceHist[0].source, 'user', 'top entry after concurrent double-PUT is user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after concurrent double-PUT');
   console.log(`concurrency check 1 PASS: concurrent double-PUT -> both ${race1.status}/${race2.status}, top history entry ${JSON.stringify(raceHist[0])}, stderr clean`);
@@ -336,19 +345,19 @@ test('cross-contamination: external edit + immediate user PUT emit correct SSE a
   const crossAPath = path.join(servedRoot, 'crossA.md');
   const crossBEnc = encodeURIComponent('crossB.md');
   writeFileSync(crossAPath, '# A\n\ninitial\n');
-  await historyOfAtLeast(`${BASE}/api/history?path=crossA.md`, 1); // initial external commit for A
+  await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=crossA.md`, 1); // initial external commit for A
 
   const crossEventsPromise = collectSSEUntil(`${BASE}/api/events`, ['crossA.md', 'crossB.md']);
   await new Promise((r) => setTimeout(r, 200));
   appendFileSync(crossAPath, 'external addition to A\n');
-  const crossPutRes = await fetch(`${BASE}/api/raw?path=${crossBEnc}`, { method: 'PUT', body: '# B\n\nfrom user\n' });
+  const crossPutRes = await fetch(`${BASE}/api/roots/${KEY}/raw?path=${crossBEnc}`, { method: 'PUT', body: '# B\n\nfrom user\n' });
   assert.equal(crossPutRes.status, 204);
   const crossEvents = await crossEventsPromise;
 
   assert.ok(crossEvents.some((e) => e.path === 'crossA.md'), 'SSE event for A arrived');
   assert.ok(crossEvents.some((e) => e.path === 'crossB.md'), 'SSE event for B arrived');
-  const histA = await historyOfAtLeast(`${BASE}/api/history?path=crossA.md`, 2);
-  const histB = await historyOfAtLeast(`${BASE}/api/history?path=${crossBEnc}`, 1);
+  const histA = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=crossA.md`, 2);
+  const histB = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=${crossBEnc}`, 1);
   assert.equal(histA[0].source, 'external', 'A entry stayed external');
   assert.equal(histB[0].source, 'user', 'B entry stayed user');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after cross-contamination scenario');
@@ -367,8 +376,8 @@ test('two overlapping external writes both produce external history entries', as
 
   assert.ok(raceEvents.some((e) => e.path === 'raceExtA.md'), 'SSE event for raceExtA arrived');
   assert.ok(raceEvents.some((e) => e.path === 'raceExtB.md'), 'SSE event for raceExtB arrived');
-  const histRaceA = await historyOfAtLeast(`${BASE}/api/history?path=raceExtA.md`, 1);
-  const histRaceB = await historyOfAtLeast(`${BASE}/api/history?path=raceExtB.md`, 1);
+  const histRaceA = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=raceExtA.md`, 1);
+  const histRaceB = await historyOfAtLeast(`${BASE}/api/roots/${KEY}/history?path=raceExtB.md`, 1);
   assert.equal(histRaceA[0].source, 'external', 'raceExtA entry is external');
   assert.equal(histRaceB[0].source, 'external', 'raceExtB entry is external');
   assert.ok(!stderr.includes('index.lock'), 'no index.lock error after two overlapping external writes');
@@ -418,9 +427,10 @@ test('file-arg mode: second cli instance on a single file lists siblings; no ind
   PORT2 = await waitForPort(() => stdout2);
   BASE2 = `http://127.0.0.1:${PORT2}`;
   await waitForServer(`${BASE2}/hello.md`);
-  assert.ok(stdout2.includes(`http://127.0.0.1:${PORT2}/hello.md`), 'cli prints file URL ending in /hello.md');
+  assert.match(stdout2, new RegExp(`http://127\\.0\\.0\\.1:${PORT2}/r/r_[A-Za-z0-9_-]{22}/hello\\.md`), 'cli prints a Root Space URL ending in /hello.md');
+  KEY2 = (await (await fetch(`${BASE2}/api/roots`)).json()).roots[0].key;
 
-  const treeRes2 = await fetch(`${BASE2}/api/tree`);
+  const treeRes2 = await fetch(`${BASE2}/api/roots/${KEY2}/tree`);
   assert.equal(treeRes2.status, 200);
   const tree2 = await treeRes2.json();
   assert.ok(tree2.includes('hello.md'));
@@ -430,10 +440,58 @@ test('file-arg mode: second cli instance on a single file lists siblings; no ind
   assert.equal(shellRes2.status, 200);
   assert.ok((await shellRes2.text()).includes('<title>showmd</title>'), 'file arg still serves app shell');
 
-  const rawRes2 = await fetch(`${BASE2}/api/raw?path=hello.md`);
+  const rawRes2 = await fetch(`${BASE2}/api/roots/${KEY2}/raw?path=hello.md`);
   assert.equal(rawRes2.status, 200);
   console.log('criterion 8 PASS: file arg — tree lists siblings, shell and raw both 200');
 
   assert.ok(!stderr.includes('index.lock') && !stderr2.includes('index.lock'), 'no index.lock in either server stderr across the whole run');
   console.log('concurrency final check PASS: grep for index.lock across both servers\' stderr — no matches');
+});
+
+// "two tabs on two roots, end to end" — proved here as one process (the
+// already-running `child`) holding two roots added via POST /api/roots, each
+// addressable and watched independently. The
+// client's rootKey SSE filter is covered at the unit level (app-boot.test);
+// this proves the server side of that contract: every change event is
+// tagged with the root it actually came from.
+test('two roots on one process: POST /api/roots adds a second root; trees and SSE stay isolated per rootKey', async () => {
+  const rootBDir = path.join(workDir, 'root-b');
+  mkdirSync(rootBDir, { recursive: true });
+  const bPath = path.join(rootBDir, 'b.md');
+  writeFileSync(bPath, '# B\n');
+
+  const addRes = await fetch(`${BASE}/api/roots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: rootBDir }),
+  });
+  assert.equal(addRes.status, 200);
+  const added = await addRes.json();
+  assert.equal(added.root.dir, rootBDir);
+  const rootBKey = added.root.key;
+
+  const rootsList = await (await fetch(`${BASE}/api/roots`)).json();
+  assert.equal(rootsList.roots.length, 2, 'the boot root and the newly added root are both listed');
+  const rootAKey = rootsList.roots.find((r) => r.dir === servedRoot).key;
+  assert.notEqual(rootAKey, rootBKey);
+
+  const treeB = await (await fetch(`${BASE}/api/roots/${rootBKey}/tree`)).json();
+  assert.deepEqual(treeB, ['b.md']);
+  const treeA = await (await fetch(`${BASE}/api/roots/${rootAKey}/tree`)).json();
+  assert.ok(treeA.includes('hello.md'), "root A's own tree is unaffected by root B joining");
+  assert.ok(!treeA.includes('b.md'), "root A's tree never leaks root B's files");
+
+  const events = collectSSEUntil(`${BASE}/api/events`, ['b.md', 'hello.md'], 6000);
+  await new Promise((r) => setTimeout(r, 200));
+  appendFileSync(bPath, '\nchanged in B\n');
+  appendFileSync(helloPath, '\nchanged in A again\n');
+  const seen = await events;
+
+  const bEvent = seen.find((e) => e.path === 'b.md');
+  const aEvent = seen.find((e) => e.path === 'hello.md');
+  assert.ok(bEvent, 'root B change produced an SSE event');
+  assert.ok(aEvent, 'root A change produced an SSE event');
+  assert.equal(bEvent.rootKey, rootBKey, "root B's event is tagged with root B's key, not root A's");
+  assert.equal(aEvent.rootKey, rootAKey, "root A's event is tagged with root A's key, not root B's");
+  console.log('two-root criterion PASS: independent trees and rootKey-tagged SSE for two roots on one process');
 });
