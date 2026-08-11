@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,7 @@ async function withIsolatedServer(fn, extra = {}) {
     await fn(base);
   } finally {
     server.close();
+    await server.whenClosed();
   }
 }
 

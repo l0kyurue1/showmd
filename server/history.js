@@ -145,7 +145,7 @@ async function dirSize(dir) {
 // below, tests pass a scripted adapter instead so everything in here — the
 // amend-window decision, the fromRepo branch, prune — runs against canned
 // git output instead of a real repo
-function createHistory(gitExec = realGitExec) {
+function createHistory(gitExec = realGitExec, options = {}) {
   function run(gitDir, workTree, args, allowCodes = [], extraOpts = {}) {
     return gitExec(['--git-dir', gitDir, '--work-tree', workTree], args, allowCodes, { cwd: workTree, ...extraOpts });
   }
@@ -177,32 +177,99 @@ function createHistory(gitExec = realGitExec) {
   // only serializes callers inside this one process; this file lock (atomic
   // create, same pattern as writeFileAtomic) is what keeps two processes off
   // the same index.lock instead of one silently losing its commit.
-  const LOCK_STALE_MS = 30000;
-  const LOCK_TIMEOUT_MS = 60000;
+  const lockStaleMs = options.lockStaleMs ?? 30000;
+  const lockTimeoutMs = options.lockTimeoutMs ?? 60000;
+  const lockPollMs = options.lockPollMs ?? 20;
+  const lockHeartbeatMs = options.lockHeartbeatMs ?? Math.max(10, Math.floor(lockStaleMs / 3));
+  const lockToken = options.lockToken || (() => crypto.randomUUID());
+  const lockPidAlive = options.lockPidAlive || ((pid) => {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return err.code === 'EPERM';
+    }
+  });
+
+  async function readLockOwner(file) {
+    try {
+      const owner = JSON.parse(await fsp.readFile(file, 'utf8'));
+      return owner && typeof owner.token === 'string' ? owner : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function claimLockFile(lockPath, claimPath) {
+    try {
+      await fsp.rename(lockPath, claimPath);
+      return true;
+    } catch (err) {
+      if (err.code === 'ENOENT') return false;
+      throw err;
+    }
+  }
+
   async function withCrossProcessLock(gitDir, fn) {
     const lockPath = `${gitDir}.lock`;
     await fsp.mkdir(path.dirname(lockPath), { recursive: true });
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    const owner = { token: lockToken(), pid: process.pid };
+    let deadline = Date.now() + lockTimeoutMs;
+    let observedMtime = /** @type {number | null} */ (null);
     for (;;) {
       try {
         const handle = await fsp.open(lockPath, 'wx');
-        await handle.close();
+        try {
+          await handle.writeFile(JSON.stringify(owner));
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
         break;
       } catch (err) {
         if (err.code !== 'EEXIST') throw err;
         const stat = await fsp.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-          await fsp.rm(lockPath, { force: true }).catch(() => {});
-          continue;
+        if (stat && stat.mtimeMs !== observedMtime) {
+          observedMtime = stat.mtimeMs;
+          deadline = Date.now() + lockTimeoutMs;
+        }
+        if (stat && Date.now() - stat.mtimeMs > lockStaleMs) {
+          const existingOwner = await readLockOwner(lockPath);
+          if (!existingOwner || !lockPidAlive(existingOwner.pid)) {
+            const staleClaim = `${lockPath}.stale-${lockToken()}`;
+            if (await claimLockFile(lockPath, staleClaim)) {
+              await fsp.rm(staleClaim, { force: true }).catch(() => {});
+              observedMtime = null;
+              deadline = Date.now() + lockTimeoutMs;
+            }
+            continue;
+          }
         }
         if (Date.now() > deadline) throw Object.assign(new Error(`history lock timeout: ${lockPath}`), { code: 'ELOCKTIMEOUT' });
-        await new Promise((r) => setTimeout(r, 20 + Math.random() * 30));
+        await new Promise((r) => setTimeout(r, lockPollMs + Math.random() * lockPollMs));
       }
     }
+    const heartbeat = setInterval(async () => {
+      const current = await readLockOwner(lockPath);
+      if (!current || current.token !== owner.token) return;
+      const now = new Date();
+      await fsp.utimes(lockPath, now, now).catch(() => {});
+    }, lockHeartbeatMs);
+    heartbeat.unref?.();
     try {
       return await fn();
     } finally {
-      await fsp.rm(lockPath, { force: true }).catch(() => {});
+      clearInterval(heartbeat);
+      const releaseClaim = `${lockPath}.release-${owner.token}`;
+      if (await claimLockFile(lockPath, releaseClaim).catch(() => false)) {
+        const releasedOwner = await readLockOwner(releaseClaim);
+        if (releasedOwner && releasedOwner.token === owner.token) {
+          await fsp.rm(releaseClaim, { force: true }).catch(() => {});
+        } else {
+          await fsp.rename(releaseClaim, lockPath).catch(() => {});
+        }
+      }
     }
   }
 
@@ -262,12 +329,29 @@ function createHistory(gitExec = realGitExec) {
       } catch {
         continue;
       }
+      let migrated = false;
       try {
-        await migrateOneRepo(claimDir, entry.name);
+        migrated = await migrateOneRepo(claimDir, entry.name);
       } catch (err) {
         console.error(`showmd: history migration of ${entry.name} failed: ${err.message}`);
-      } finally {
+      }
+      if (migrated) {
         await rmRepo(claimDir);
+        continue;
+      }
+      try {
+        await fsp.rename(claimDir, legacyDir);
+      } catch (err) {
+        const quarantine = `${legacyDir}.unmigrated-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        let preservedAt = claimDir;
+        let quarantineError = '';
+        try {
+          await fsp.rename(claimDir, quarantine);
+          preservedAt = quarantine;
+        } catch (claimErr) {
+          quarantineError = `; quarantine failed: ${claimErr.message}`;
+        }
+        console.error(`showmd: legacy history preserved at ${preservedAt}: ${err.message}${quarantineError}`);
       }
     }
   }
@@ -279,43 +363,59 @@ function createHistory(gitExec = realGitExec) {
       cfg = await fsp.readFile(cfgPath, 'utf8');
     } catch {
       console.error(`showmd: history migration skipped ${label}: no config found`);
-      return;
+      return false;
     }
     const m = cfg.match(/^\s*worktree\s*=\s*(.+?)\s*$/m);
     if (!m) {
       console.error(`showmd: history migration skipped ${label}: no core.worktree recorded`);
-      return;
+      return false;
     }
     const legacyRoot = m[1];
 
-    const allPaths = await listAllTrackedPaths(legacyGitDir, legacyRoot);
-    if (!allPaths.length) return;
+    const allPaths = await listAllHistoricalPaths(legacyGitDir, legacyRoot);
+    if (!allPaths.length) return false;
 
     const entries = [];
     for (const relPath of allPaths) {
       const commits = await allCommitsOldestFirst(legacyGitDir, legacyRoot, relPath);
-      for (const c of commits) entries.push({ ...c, relPath });
+      for (const c of commits) {
+        const present = await run(legacyGitDir, legacyRoot, ['ls-tree', '-r', '--name-only', c.rev, '--', relPath], [128]);
+        if (present.code !== 0) throw new Error(`cannot inspect ${c.rev}:${relPath}`);
+        if (!present.stdout.split('\n').includes(relPath)) continue;
+        const content = await run(legacyGitDir, legacyRoot, ['show', `${c.rev}:${relPath}`], [128]);
+        if (content.code !== 0) throw new Error(`cannot read ${c.rev}:${relPath}`);
+        entries.push({ ...c, relPath, content: content.stdout });
+      }
     }
     entries.sort((a, b) => a.ts - b.ts);
-    if (!entries.length) return;
+    if (!entries.length) return false;
 
     const realLegacyRoot = await identityAbs(legacyRoot);
     const driveRoot = driveRootOf(realLegacyRoot);
     const newGitDir = await ensureRepo(driveRoot);
-    if (!newGitDir) return;
+    if (!newGitDir) return false;
 
     await withCrossProcessLock(newGitDir, () => withGitLock(newGitDir, async () => {
       for (const entry of entries) {
-        const content = await run(legacyGitDir, legacyRoot, ['show', `${entry.rev}:${entry.relPath}`], [128]);
-        if (content.code !== 0) continue;
         const absPath = path.join(realLegacyRoot, entry.relPath);
         const newRelPath = relKeyFor(driveRoot, absPath);
         const sep = entry.subject.indexOf(': ');
         const source = sep === -1 ? SOURCES.external : entry.subject.slice(0, sep);
-        await writeBlobInto(newGitDir, driveRoot, newRelPath, content.stdout);
-        await commitAt(newGitDir, driveRoot, `${source}: ${newRelPath}`, entry.ts);
+        const importId = crypto.createHash('sha256').update(`${label}\0${entry.rev}\0${entry.relPath}`).digest('hex');
+        const marker = `showmd-legacy-id: ${importId}`;
+        const imported = await run(newGitDir, driveRoot, ['log', '--all', `--grep=${marker}`, '--format=%H', '-1'], [128]);
+        if (imported.code === 0 && imported.stdout.trim()) {
+          const existing = await run(newGitDir, driveRoot, ['show', `${imported.stdout.trim()}:${newRelPath}`], [128]);
+          if (existing.code !== 0 || existing.stdout !== entry.content) throw new Error(`legacy verification failed for ${entry.relPath}`);
+          continue;
+        }
+        await writeBlobInto(newGitDir, driveRoot, newRelPath, entry.content);
+        await commitAt(newGitDir, driveRoot, `${source}: ${newRelPath}`, entry.ts, marker);
+        const copied = await run(newGitDir, driveRoot, ['show', `HEAD:${newRelPath}`], [128]);
+        if (copied.code !== 0 || copied.stdout !== entry.content) throw new Error(`legacy verification failed for ${entry.relPath}`);
       }
     }));
+    return true;
   }
 
   async function getLastCommit(gitDir, driveRoot, storeRelPath) {
@@ -414,9 +514,16 @@ function createHistory(gitExec = realGitExec) {
     return r.stdout.split('\n').filter(Boolean);
   }
 
+  async function listAllHistoricalPaths(gitDir, driveRoot) {
+    const r = await run(gitDir, driveRoot, ['log', '--all', '--format=', '--name-only'], [128]);
+    if (r.code !== 0 || !r.stdout) return [];
+    return [...new Set(r.stdout.split('\n').filter(Boolean))];
+  }
+
   async function allCommitsOldestFirst(gitDir, driveRoot, storeRelPath) {
-    const r = await run(gitDir, driveRoot, ['log', '--reverse', '--format=%H\x1f%ct\x1f%s', '--', storeRelPath], [128]);
-    if (r.code !== 0 || !r.stdout.trim()) return [];
+    const r = await run(gitDir, driveRoot, ['log', '--all', '--reverse', '--format=%H\x1f%ct\x1f%s', '--', storeRelPath], [128]);
+    if (r.code !== 0) throw new Error(`cannot enumerate commits for ${storeRelPath}`);
+    if (!r.stdout.trim()) return [];
     return r.stdout.trim().split('\n').map((line) => {
       const [rev, ts, subject] = line.split('\x1f');
       return { rev, ts: Number(ts), subject };
@@ -434,9 +541,10 @@ function createHistory(gitExec = realGitExec) {
     }
   }
 
-  async function commitAt(gitDir, driveRoot, subject, ts) {
+  async function commitAt(gitDir, driveRoot, subject, ts, marker) {
     const stamp = `${ts} +0000`;
-    await run(gitDir, driveRoot, ['commit', '-m', subject], [], { env: { GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp } });
+    const args = ['commit', ...(marker ? ['--allow-empty'] : []), '-m', subject, ...(marker ? ['-m', marker] : [])];
+    await run(gitDir, driveRoot, args, [], { env: { GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp } });
   }
 
   // "Selected folder's history" can no longer delete a directory shared by
