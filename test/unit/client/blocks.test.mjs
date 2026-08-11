@@ -321,9 +321,13 @@ test('renderDocumentInto renders and fully enhances a Read Mode document', async
 });
 
 test('refreshThemeIn rebuilds theme-dependent rendering behind the interface', async () => {
-  const fresh = renderer();
+  const fresh = createBlockRenderer({
+    markdown: () => '<pre><code class="language-mermaid">graph Theme</code></pre>',
+    load: async (name) => ({ hljs, katex, mermaid })[name],
+    reportError: () => {},
+  });
   const host = document.createElement('div');
-  host.innerHTML = '<div class="mermaid-diagram" data-src="graph Theme"></div>';
+  await fresh.renderDocumentInto(host, 'source');
   document.documentElement.dataset.theme = 'dark';
   await fresh.refreshThemeIn(host);
   assert.equal(mermaid.initOpts.theme, 'dark');
