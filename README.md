@@ -94,6 +94,7 @@ showmd                # serve the current directory
 showmd notes/         # serve a folder
 showmd README.md      # open a single file
 showmd --port 8080    # pick a port (default 4321; falls back to a free port if taken)
+showmd --new          # start a new dedicated server instead of reusing a running one
 showmd --no-open      # don't launch the browser
 showmd --help         # every command and flag (-h)
 showmd --version      # print the version (-v)
