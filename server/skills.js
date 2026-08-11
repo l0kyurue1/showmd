@@ -443,8 +443,8 @@ async function buildSkillsTree(roots, { walkMd, home = os.homedir(), cwd, mode =
   return { scopes };
 }
 
-// shared by cli.js's dedicated skills mode and the doc-mode server's
-// view=skills tree, so the composition lives in one place
+// shared by cli.js's dedicated skills mode and the server's Skills space,
+// so the composition lives in one place
 /** @param {import('../types/showmd').DiscoverRootsOptions} [opts] */
 function discoverSkillRoots({ mode = 'all', projectDirs = [], home, claudeJsonPath } = {}) {
   const globalOpts = home !== undefined ? { home } : {};

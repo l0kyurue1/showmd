@@ -18,12 +18,15 @@ function makeRoot(name) {
   return dir;
 }
 
+const FILES_RELATIVE = Object.freeze({ addressing: 'relative' });
+const FILES_KEYED = Object.freeze({ addressing: 'keyed' });
+
 const soloDir = makeRoot('solo');
-const solo = createDocumentStore([{ key: null, dir: soloDir }], false);
+const solo = createDocumentStore([{ key: null, dir: soloDir }], FILES_RELATIVE);
 
 const groupA = makeRoot('groupA');
 const groupB = makeRoot('groupB');
-const multi = createDocumentStore([{ key: 'a', dir: groupA }, { key: 'b', dir: groupB }], true);
+const multi = createDocumentStore([{ key: 'a', dir: groupA }, { key: 'b', dir: groupB }], FILES_KEYED);
 
 test.after(() => rmSync(workDir, { recursive: true, force: true }));
 
@@ -85,7 +88,7 @@ test('concurrent writes to one document both succeed and the last one wins', asy
   assert.equal(readFileSync(path.join(soloDir, 'hello.md'), 'utf8'), '# Two\n');
 });
 
-test('multi-root ids resolve inside their own group only', async () => {
+test('keyed addressing resolves inside the selected root only', async () => {
   writeFileSync(path.join(groupA, 'hello.md'), '# A\n');
   writeFileSync(path.join(groupB, 'hello.md'), '# B\n');
   assert.equal((await multi.read('a/hello.md')).text, '# A\n');
@@ -93,6 +96,22 @@ test('multi-root ids resolve inside their own group only', async () => {
   assert.deepEqual(await multi.read('hello.md'), { ok: false, code: 'forbidden' });
   assert.deepEqual(await multi.read('c/hello.md'), { ok: false, code: 'forbidden' });
   assert.deepEqual(await multi.read('a/../../groupB/hello.md'), { ok: false, code: 'forbidden' });
+});
+
+test('keyed addressing prefixes tree entries with their root key', async () => {
+  const keyedFiles = createDocumentStore([{ key: 'a', dir: groupA }], FILES_KEYED);
+  assert.equal((await keyedFiles.read('a/hello.md')).text, '# A\n');
+  assert.deepEqual((await keyedFiles.tree()).tree.sort(), ['a/hello.md', 'a/notes/deep.md']);
+});
+
+test('store roots are an immutable construction-time snapshot', async () => {
+  const roots = [{ key: null, dir: soloDir }];
+  const store = createDocumentStore(roots, FILES_RELATIVE);
+  roots[0].dir = groupA;
+  roots.splice(0, 1);
+
+  assert.equal((await store.read('hello.md')).full, path.join(soloDir, 'hello.md'));
+  assert.equal(store.setRoots, undefined);
 });
 
 test('resolveAsset resolves a non-.md id the same way locate resolves a doc id', async () => {
@@ -205,8 +224,71 @@ function fakeGitExec() {
 
 function makeFakeHistoryStore(name) {
   const dir = makeRoot(name);
-  return createDocumentStore([{ key: null, dir }], false, history.createHistory(fakeGitExec()));
+  return createDocumentStore([{ key: null, dir }], FILES_RELATIVE, history.createHistory(fakeGitExec()));
 }
+
+test('beginClose rejects new writes and external recording while drain awaits accepted history work', async () => {
+  const dir = makeRoot('lifecycle-write');
+  let releaseRecord;
+  let recordStarted;
+  const started = new Promise((resolve) => { recordStarted = resolve; });
+  const blocked = new Promise((resolve) => { releaseRecord = resolve; });
+  let records = 0;
+  const store = createDocumentStore([{ key: null, dir }], FILES_RELATIVE, {
+    async record() {
+      records += 1;
+      recordStarted();
+      await blocked;
+    },
+  });
+
+  const accepted = store.write('hello.md', Buffer.from('# Accepted\n'));
+  await started;
+  store.beginClose();
+
+  assert.deepEqual(await store.write('notes/deep.md', Buffer.from('# Rejected\n')), { ok: false, code: 'closed' });
+  assert.deepEqual(await store.recordIfExternal('notes/deep.md'), { ok: false, code: 'closed' });
+  assert.equal(readFileSync(path.join(dir, 'notes', 'deep.md'), 'utf8'), '# Deep\n');
+  assert.equal(records, 1);
+  assert.equal('writeLocks' in store, false);
+
+  let drained = false;
+  const drain = store.drain().then(() => { drained = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+
+  releaseRecord();
+  assert.deepEqual(await accepted, { ok: true });
+  await drain;
+  assert.equal(drained, true);
+});
+
+test('an accepted restore may finish after close begins and is included in drain', async () => {
+  const dir = makeRoot('lifecycle-restore');
+  let releaseContent;
+  let contentStarted;
+  const started = new Promise((resolve) => { contentStarted = resolve; });
+  const blocked = new Promise((resolve) => { releaseContent = resolve; });
+  const store = createDocumentStore([{ key: null, dir }], FILES_RELATIVE, {
+    async checkGitAvailable() { return true; },
+    async contentAt() {
+      contentStarted();
+      await blocked;
+      return '# Restored\n';
+    },
+    async record() {},
+  });
+
+  const accepted = store.restore('hello.md', 'abcd', false);
+  await started;
+  store.beginClose();
+  const drain = store.drain();
+  releaseContent();
+
+  assert.deepEqual(await accepted, { ok: true });
+  await drain;
+  assert.equal(readFileSync(path.join(dir, 'hello.md'), 'utf8'), '# Restored\n');
+});
 
 test('a save becomes a timeline entry', async () => {
   const store = makeFakeHistoryStore('fake-history-1');
@@ -375,15 +457,15 @@ test('walkFiles strictRoot: an unreadable root throws with its errno, an unreada
 });
 
 test('tree: rooted single root lists its markdown', async () => {
-  const outcome = await solo.tree(null, {});
+  const outcome = await solo.tree();
   assert.equal(outcome.ok, true);
   assert.ok(outcome.tree.includes('hello.md') && outcome.tree.includes('notes/deep.md'));
   assert.ok(outcome.tree.every((id) => isMarkdownFile(id)));
 });
 
-test('tree: rootless with no view -> no_root', async () => {
-  const rootless = createDocumentStore([], false);
-  assert.deepEqual(await rootless.tree(null, {}), { ok: false, code: 'no_root' });
+test('tree: rootless -> no_root', async () => {
+  const rootless = createDocumentStore([], FILES_RELATIVE);
+  assert.deepEqual(await rootless.tree(), { ok: false, code: 'no_root' });
 });
 
 test('tree: an unreadable root -> unreadable_root carrying dir and errno', { skip: process.platform === 'win32' ? 'chmod does not restrict access on windows' : process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false }, async () => {
@@ -391,8 +473,8 @@ test('tree: an unreadable root -> unreadable_root carrying dir and errno', { ski
   mkdirSync(denied, { recursive: true });
   chmodSync(denied, 0o000);
   try {
-    const store = createDocumentStore([{ key: null, dir: denied }], false);
-    const outcome = await store.tree(null, {});
+    const store = createDocumentStore([{ key: null, dir: denied }], FILES_RELATIVE);
+    const outcome = await store.tree();
     assert.equal(outcome.ok, false);
     assert.equal(outcome.code, 'unreadable_root');
     assert.equal(outcome.dir, denied);
@@ -402,39 +484,16 @@ test('tree: an unreadable root -> unreadable_root carrying dir and errno', { ski
   }
 });
 
-test('tree: view=agents with an unknown agent -> unknown_agent', async () => {
-  assert.deepEqual(await solo.tree('agents', { agent: 'nope-not-an-agent' }), { ok: false, code: 'unknown_agent' });
-});
-
-test('tree: view=agents with a known agent returns that agent tree', async () => {
-  const outcome = await solo.tree('agents', { agent: 'claude', home: workDir, cwd: soloDir });
+test('tree: scoped to a subdirectory lists only that subtree', async () => {
+  const outcome = await solo.tree({ scope: 'notes' });
   assert.equal(outcome.ok, true);
-  assert.ok(Array.isArray(outcome.tree.roots));
+  assert.deepEqual(outcome.tree, ['notes/deep.md']);
 });
 
-test('tree: multi-root ignores view and builds the skills tree', async () => {
-  const outcome = await multi.tree(null, { skillsMode: 'all', home: workDir, cwd: workDir });
-  assert.equal(outcome.ok, true);
-  assert.ok(outcome.tree && typeof outcome.tree === 'object');
+test('tree: a scope escaping the root is forbidden', async () => {
+  assert.deepEqual(await solo.tree({ scope: '../groupA' }), { ok: false, code: 'forbidden' });
 });
 
-test('tree: view=skills while rootless builds the global-scope skills tree', async () => {
-  const rootless = createDocumentStore([], false);
-  const outcome = await rootless.tree('skills', { home: workDir, cwd: workDir });
-  assert.equal(outcome.ok, true);
-  assert.ok(outcome.tree && typeof outcome.tree === 'object');
-});
-
-test('storeFor: multi-root store always resolves to itself', async () => {
-  assert.equal(await multi.storeFor('a/hello.md'), multi);
-  assert.equal(await multi.storeFor('nonsense'), multi);
-});
-
-test('storeFor: an id the main store already owns resolves to that store', async () => {
-  assert.equal(await solo.storeFor('hello.md'), solo);
-});
-
-test('storeFor: rootless with no matching skill or agent id resolves to null', async () => {
-  const rootless = createDocumentStore([], false);
-  assert.equal(await rootless.storeFor('nope.md'), null);
+test('tree: a nonexistent scope is not_found', async () => {
+  assert.deepEqual(await solo.tree({ scope: 'nope' }), { ok: false, code: 'not_found' });
 });

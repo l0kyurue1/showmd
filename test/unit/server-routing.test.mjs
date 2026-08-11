@@ -7,23 +7,23 @@ const { findRoute, broadcastSSE } = require('../../server/server.js');
 
 function fakeRoutes() {
   return [
-    { method: 'GET', match: (pathname) => pathname === '/api/tree', handler: 'tree' },
-    { method: 'PUT', match: (pathname) => pathname === '/api/raw', handler: 'raw-put' },
-    { method: 'GET', match: (pathname) => pathname === '/api/raw', handler: 'raw-get' },
+    { method: 'GET', match: (pathname) => pathname === '/api/version', handler: 'version' },
+    { method: 'PUT', match: (pathname) => pathname === '/api/settings', handler: 'settings-put' },
+    { method: 'GET', match: (pathname) => pathname === '/api/settings', handler: 'settings-get' },
     { method: 'GET', match: (pathname) => pathname.startsWith('/assets/'), handler: 'assets' },
     { method: 'GET', match: () => true, handler: 'shell' },
   ];
 }
 
 test('findRoute: exact method + path match', () => {
-  const route = findRoute(fakeRoutes(), 'GET', '/api/tree', new URL('http://x/api/tree'));
-  assert.equal(route.handler, 'tree');
+  const route = findRoute(fakeRoutes(), 'GET', '/api/version', new URL('http://x/api/version'));
+  assert.equal(route.handler, 'version');
 });
 
 test('findRoute: same path, different method resolves independently', () => {
   const routes = fakeRoutes();
-  assert.equal(findRoute(routes, 'PUT', '/api/raw', new URL('http://x/api/raw')).handler, 'raw-put');
-  assert.equal(findRoute(routes, 'GET', '/api/raw', new URL('http://x/api/raw')).handler, 'raw-get');
+  assert.equal(findRoute(routes, 'PUT', '/api/settings', new URL('http://x/api/settings')).handler, 'settings-put');
+  assert.equal(findRoute(routes, 'GET', '/api/settings', new URL('http://x/api/settings')).handler, 'settings-get');
 });
 
 test('findRoute: prefix match', () => {
@@ -38,7 +38,7 @@ test('findRoute: unmatched method + path falls through to catch-all', () => {
 
 test('findRoute: unmatched method with no catch-all returns null (404)', () => {
   const routes = fakeRoutes().slice(0, -1);
-  assert.equal(findRoute(routes, 'DELETE', '/api/tree', new URL('http://x/api/tree')), null);
+  assert.equal(findRoute(routes, 'DELETE', '/api/version', new URL('http://x/api/version')), null);
 });
 
 test('broadcastSSE: writes SSE-formatted payload to every client', () => {

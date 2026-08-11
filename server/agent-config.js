@@ -185,8 +185,8 @@ function invalidate() {
 }
 
 // a doc id's leading `key/` segment identifies which agent built it (e.g.
-// `claude-rules/foo.md`, `codex-home/AGENTS.md`) so pickStore can route a
-// raw/history/diff request without knowing the agent in advance
+// `claude-rules/foo.md`, `codex-home/AGENTS.md`) so a document request routes
+// without knowing the agent in advance
 function agentKeyForId(id) {
   const slash = id.indexOf('/');
   if (slash === -1) return null;

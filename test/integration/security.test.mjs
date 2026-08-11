@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const { createServer } = require('../../server/server.js');
 
 // isolates the boot-time recents write (server.js's createServer) from
-// whatever this machine has for real, same trick as pick-root.test.mjs
+// whatever this machine has for real
 process.env.HOME = mkdtempSync(path.join(tmpdir(), 'showmd-sec-home-'));
 // os.homedir() reads USERPROFILE on windows and ignores HOME
 process.env.USERPROFILE = process.env.HOME;
@@ -22,7 +22,8 @@ async function withServer(fn) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await fn(base);
+    const roots = await (await fetch(`${base}/api/roots`)).json();
+    await fn(base, roots.roots[0].key);
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });
@@ -30,8 +31,8 @@ async function withServer(fn) {
 }
 
 test('cross-origin write is rejected 403', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/raw?path=a.md`, {
+  await withServer(async (base, key) => {
+    const res = await fetch(`${base}/api/roots/${key}/raw?path=a.md`, {
       method: 'PUT', body: 'evil', headers: { Origin: 'http://evil.example' },
     });
     assert.equal(res.status, 403);
@@ -39,8 +40,8 @@ test('cross-origin write is rejected 403', async () => {
 });
 
 test('loopback-origin write is allowed', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/raw?path=a.md`, {
+  await withServer(async (base, key) => {
+    const res = await fetch(`${base}/api/roots/${key}/raw?path=a.md`, {
       method: 'PUT', body: '# ok\n', headers: { Origin: base },
     });
     assert.equal(res.status, 204);
@@ -48,18 +49,18 @@ test('loopback-origin write is allowed', async () => {
 });
 
 test('origin-less write (curl, non-browser) is allowed', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/raw?path=a.md`, { method: 'PUT', body: '# ok2\n' });
+  await withServer(async (base, key) => {
+    const res = await fetch(`${base}/api/roots/${key}/raw?path=a.md`, { method: 'PUT', body: '# ok2\n' });
     assert.equal(res.status, 204);
   });
 });
 
 // fetch strips Host (forbidden header), so speak raw http for the rebinding case
 test('non-loopback Host is rejected 403 even on GET (DNS rebinding)', async () => {
-  await withServer(async (base) => {
+  await withServer(async (base, key) => {
     const { port } = new URL(base);
     const status = await new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port, path: '/api/tree', headers: { Host: 'evil.example' } },
+      http.get({ host: '127.0.0.1', port, path: `/api/roots/${key}/tree`, headers: { Host: 'evil.example' } },
         (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject);
     });
     assert.equal(status, 403);
@@ -67,8 +68,8 @@ test('non-loopback Host is rejected 403 even on GET (DNS rebinding)', async () =
 });
 
 test('cross-origin GET is not blocked', async () => {
-  await withServer(async (base) => {
-    const res = await fetch(`${base}/api/tree`, { headers: { Origin: 'http://evil.example' } });
+  await withServer(async (base, key) => {
+    const res = await fetch(`${base}/api/roots/${key}/tree`, { headers: { Origin: 'http://evil.example' } });
     assert.equal(res.status, 200);
   });
 });
@@ -90,6 +91,13 @@ test('POST /api/install-app: cross-origin request is rejected 403 (Origin guard)
 test('POST /api/restart: cross-origin request is rejected 403 (Origin guard)', async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/api/restart`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
+    assert.equal(res.status, 403);
+  });
+});
+
+test('POST /api/shutdown: cross-origin request is rejected 403 (Origin guard)', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/shutdown`, { method: 'POST', headers: { Origin: 'http://evil.example' } });
     assert.equal(res.status, 403);
   });
 });

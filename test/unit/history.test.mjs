@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-history-'));
 process.env.SHOWMD_HISTORY_HOME = path.join(workDir, 'history');
 test.after(() => rmSync(workDir, { recursive: true, force: true }));
 
-const { createHistory, parseLog, historyDirFor, prune, pruneAll, pruneAllDir, dirSize, historySize } = await import('../../server/history.js');
+const {
+  createHistory, parseLog, historyDirFor, prune, pruneAll, pruneAllDir, dirSize, historySize, timeline, record,
+  checkGitAvailable, contentAt,
+} = await import('../../server/history.js');
 
 function fakeExec(handlers) {
   const calls = [];
@@ -42,13 +46,22 @@ function ensureRepoHandlers() {
   ];
 }
 
+// the mocked roots below never exist on disk, so history.js's realpath step
+// falls back to path.resolve(root) unchanged — this mirrors that fallback to
+// predict the exact store-relative path a commit subject will carry
+function storeRelPathFor(root, relPath) {
+  const driveRoot = path.parse(root).root;
+  return path.relative(driveRoot, path.join(path.resolve(root), relPath)).split(path.sep).join('/');
+}
+
 // git commit timestamps are second-granular (%ct), so the boundary is tested
 // at whole seconds either side of AMEND_WINDOW_MS rather than at 1ms offsets
 test('amend window: a save 59s after the last commit amends it', async () => {
   const now = 1750000000000;
   const lastTs = Math.floor(now / 1000) - 59;
   const rev = 'a'.repeat(40);
-  const subject = 'user: doc.md';
+  const root = path.join(workDir, 'root-inside');
+  const subject = `user: ${storeRelPathFor(root, 'doc.md')}`;
   const exec = fakeExec([
     ...ensureRepoHandlers(),
     (p, a) => a[0] === 'log' && { code: 0, stdout: `${rev}\x1f${subject}\x1f${lastTs}` },
@@ -58,7 +71,7 @@ test('amend window: a save 59s after the last commit amends it', async () => {
     (p, a) => a[0] === 'commit' && { code: 0, stdout: '' },
   ]);
   const history = createHistory(exec);
-  await withFrozenNow(now, () => history.record(path.join(workDir, 'root-inside'), 'doc.md', 'user'));
+  await withFrozenNow(now, () => history.record(root, 'doc.md', 'user'));
   const commitCall = exec.calls.filter((c) => c.args[0] === 'commit').pop();
   assert.deepEqual(commitCall.args, ['commit', '--amend', '--no-edit']);
 });
@@ -67,7 +80,8 @@ test('amend window: a save exactly 60s after the last commit starts a new one', 
   const now = 1750000000000;
   const lastTs = Math.floor(now / 1000) - 60;
   const rev = 'b'.repeat(40);
-  const subject = 'user: doc.md';
+  const root = path.join(workDir, 'root-outside');
+  const subject = `user: ${storeRelPathFor(root, 'doc.md')}`;
   const exec = fakeExec([
     ...ensureRepoHandlers(),
     (p, a) => a[0] === 'log' && { code: 0, stdout: `${rev}\x1f${subject}\x1f${lastTs}` },
@@ -77,9 +91,9 @@ test('amend window: a save exactly 60s after the last commit starts a new one', 
     (p, a) => a[0] === 'commit' && { code: 0, stdout: '' },
   ]);
   const history = createHistory(exec);
-  await withFrozenNow(now, () => history.record(path.join(workDir, 'root-outside'), 'doc.md', 'user'));
+  await withFrozenNow(now, () => history.record(root, 'doc.md', 'user'));
   const commitCall = exec.calls.filter((c) => c.args[0] === 'commit').pop();
-  assert.deepEqual(commitCall.args, ['commit', '-m', 'user: doc.md']);
+  assert.deepEqual(commitCall.args, ['commit', '-m', subject]);
 });
 
 test('parseLog parses a well-formed record with numstat', () => {
@@ -179,23 +193,13 @@ test('the shadow repo stays out of the served directory', () => {
   assert.ok(!historyDirFor(root).startsWith(root));
 });
 
-test('prune removes a document\'s shadow directory and returns its path', async () => {
-  const root = path.join(workDir, 'root-prune');
-  const dir = historyDirFor(root);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, 'marker'), 'x');
-  assert.ok(existsSync(dir));
-  const returned = await prune(root);
-  assert.equal(returned, dir);
-  assert.ok(!existsSync(dir));
-});
-
-test('prune on a document with no shadow directory is a harmless no-op', async () => {
-  const root = path.join(workDir, 'root-prune-missing');
-  const dir = historyDirFor(root);
-  assert.ok(!existsSync(dir));
-  const returned = await prune(root);
-  assert.equal(returned, dir);
+// historyDirFor is keyed by filesystem root (POSIX "/", or a drive letter on
+// Windows), not by the served root passed in — that is the whole point of the
+// rekey: every root on the same drive shares one repo
+test('historyDirFor returns the same shadow directory for two unrelated roots on one drive', () => {
+  const a = historyDirFor(path.join(workDir, 'unrelated-a'));
+  const b = historyDirFor(path.join(workDir, 'unrelated-b'));
+  assert.equal(a, b);
 });
 
 test('dirSize sums file bytes recursively across nested directories', async () => {
@@ -210,26 +214,241 @@ test('dirSize on a missing directory returns 0 instead of throwing', async () =>
   assert.equal(await dirSize(path.join(workDir, 'does-not-exist')), 0);
 });
 
-test('historySize reads the size of the given root\'s own shadow directory', async () => {
-  const root = path.join(workDir, 'root-historysize');
-  const dir = historyDirFor(root);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, 'marker'), 'x'.repeat(42));
-  assert.equal(await historySize(root), 42);
-});
-
 test('pruneAll removes every shadow repo under the history home', async () => {
   const dirA = historyDirFor(path.join(workDir, 'root-pruneall-a'));
-  const dirB = historyDirFor(path.join(workDir, 'root-pruneall-b'));
   mkdirSync(dirA, { recursive: true });
-  mkdirSync(dirB, { recursive: true });
   writeFileSync(path.join(dirA, 'marker'), 'x');
-  writeFileSync(path.join(dirB, 'marker'), 'x');
   assert.ok(existsSync(dirA));
-  assert.ok(existsSync(dirB));
   const returned = await pruneAll();
   assert.equal(returned, pruneAllDir());
   assert.ok(!existsSync(dirA));
-  assert.ok(!existsSync(dirB));
   assert.ok(!existsSync(pruneAllDir()));
+});
+
+// --- real-git coverage below: the mocked exec above proves the argv shape,
+// these prove the actual on-disk behaviour the rekey is about ---
+
+const git = await checkGitAvailable();
+
+function realGitTmp(prefix) {
+  return realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
+}
+
+test('the same file reached through two different roots shares one history timeline', { skip: !git && 'git unavailable' }, async () => {
+  const base = realGitTmp('showmd-history-shared-');
+  const parent = path.join(base, 'project');
+  const child = path.join(base, 'project', 'docs');
+  mkdirSync(child, { recursive: true });
+  const file = path.join(child, 'guide.md');
+  writeFileSync(file, '# v1\n');
+  await record(parent, 'docs/guide.md', 'user');
+  writeFileSync(file, '# v2\n');
+  await record(child, 'guide.md', 'user');
+
+  const viaParent = await timeline(parent, 'docs/guide.md');
+  const viaChild = await timeline(child, 'guide.md');
+  assert.equal(viaParent.length, viaChild.length);
+  assert.deepEqual(viaParent.map((e) => e.rev), viaChild.map((e) => e.rev));
+  assert.ok(viaParent.length >= 1);
+});
+
+test('two concurrent writers on the shared repo lose no history to lock contention', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-concurrent-');
+  const file = path.join(root, 'race.md');
+  writeFileSync(file, 'start');
+  // two independent createHistory() instances share nothing in-process (no
+  // shared gitLocks map), so the only thing serializing them is the
+  // cross-process file lock — this stands in for two real showmd processes
+  const h1 = createHistory();
+  const h2 = createHistory();
+
+  const rounds = 10;
+  const attempts = [];
+  for (let round = 0; round < rounds; round++) {
+    writeFileSync(file, `round-${round}-${Math.random()}`);
+    attempts.push(h1.record(root, 'race.md', 'user'));
+    writeFileSync(file, `round-${round}-${Math.random()}`);
+    attempts.push(h2.record(root, 'race.md', 'external'));
+  }
+  // the assertion that matters: none of the 2*rounds concurrent commits
+  // rejects. A lost write from lock contention surfaces here as a thrown git
+  // error (e.g. a stale index.lock), not as a quietly-missing entry.
+  await assert.doesNotReject(Promise.all(attempts));
+
+  const entries = await h1.timeline(root, 'race.md');
+  assert.ok(entries.length >= 1 && entries.length <= rounds * 2, `expected a plausible commit count, got ${entries.length}`);
+  // the repo (shared with every other test in this file) must still be a
+  // coherent, readable git object store afterward — a corrupted index or a
+  // stray leftover lock file would break this
+  const gitDir = historyDirFor(root);
+  execFileSync('git', ['--git-dir', gitDir, 'log', '--oneline'], { encoding: 'utf8' });
+  assert.equal(existsSync(`${gitDir}.lock`), false);
+});
+
+test('migration recovers a legacy per-root repo via its recorded core.worktree', { skip: !git && 'git unavailable' }, async () => {
+  const home = process.env.SHOWMD_HISTORY_HOME;
+  mkdirSync(home, { recursive: true });
+  const legacyRoot = realGitTmp('showmd-history-legacy-');
+  writeFileSync(path.join(legacyRoot, 'notes.md'), 'v1');
+  const legacyGitDir = path.join(home, '1'.repeat(40));
+  const gitArgs = (...args) => execFileSync('git', ['--git-dir', legacyGitDir, '--work-tree', legacyRoot, ...args], { encoding: 'utf8' });
+  gitArgs('init', '-q');
+  gitArgs('config', 'user.name', 'showmd');
+  gitArgs('config', 'user.email', 'showmd@local');
+  gitArgs('add', '-f', '--', 'notes.md');
+  gitArgs('commit', '-m', 'user: notes.md');
+  writeFileSync(path.join(legacyRoot, 'notes.md'), 'v2');
+  gitArgs('add', '-f', '--', 'notes.md');
+  gitArgs('commit', '-m', 'user: notes.md');
+
+  const history = createHistory();
+  await history.migrateLegacyHistory();
+
+  assert.ok(!existsSync(legacyGitDir));
+  const entries = await history.timeline(legacyRoot, 'notes.md');
+  assert.equal(entries.length, 2);
+  const oldest = entries[entries.length - 1];
+  assert.equal(await history.contentAt(legacyRoot, 'notes.md', oldest.rev, false), 'v1');
+});
+
+test('a legacy repo with no core.worktree recorded is skipped and logged, not guessed', { skip: !git && 'git unavailable' }, async () => {
+  const home = process.env.SHOWMD_HISTORY_HOME;
+  mkdirSync(home, { recursive: true });
+  const badGitDir = path.join(home, '2'.repeat(40));
+  mkdirSync(path.join(badGitDir, 'objects'), { recursive: true });
+  writeFileSync(path.join(badGitDir, 'config'), '[core]\n\tbare = false\n');
+
+  const originalError = console.error;
+  const logged = [];
+  console.error = (msg) => logged.push(msg);
+  try {
+    const history = createHistory();
+    await history.migrateLegacyHistory();
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.ok(!existsSync(badGitDir), 'the unreadable legacy dir is still cleaned up after being skipped');
+  assert.ok(logged.some((m) => m.includes('no core.worktree recorded')), 'the skip is logged, not silent');
+});
+
+test('historySize is a prefix query: it only counts a root\'s own tracked paths', { skip: !git && 'git unavailable' }, async () => {
+  const rootA = realGitTmp('showmd-history-size-a-');
+  const rootB = realGitTmp('showmd-history-size-b-');
+  writeFileSync(path.join(rootA, 'a.md'), '# a content\n');
+  writeFileSync(path.join(rootB, 'b.md'), '# b content, a bit longer\n');
+  await record(rootA, 'a.md', 'user');
+  await record(rootB, 'b.md', 'user');
+
+  const sizeA = await historySize(rootA);
+  const sizeB = await historySize(rootB);
+  assert.ok(sizeA > 0);
+  assert.ok(sizeB > 0);
+  assert.notEqual(sizeA, sizeB);
+
+  const total = await historySize(path.parse(rootA).root);
+  assert.ok(total >= sizeA + sizeB);
+});
+
+test('totalHistorySize sums tracked content across the store, not the store\'s physical footprint', { skip: !git && 'git unavailable' }, async () => {
+  await pruneAll();
+  const rootA = realGitTmp('showmd-history-total-a-');
+  const rootB = realGitTmp('showmd-history-total-b-');
+  writeFileSync(path.join(rootA, 'a.md'), '# a\n');
+  writeFileSync(path.join(rootB, 'b.md'), '# b changed\n');
+  await record(rootA, 'a.md', 'user');
+  await record(rootB, 'b.md', 'user');
+
+  const sizeA = await historySize(rootA);
+  const sizeB = await historySize(rootB);
+  const { totalHistorySize } = await import('../../server/history.js');
+  const total = await totalHistorySize();
+  assert.equal(total, sizeA + sizeB);
+  // a fresh git init writes several KB of hook templates; the tracked-content
+  // total must not include that fixed per-repo overhead
+  const gitDir = historyDirFor(rootA);
+  assert.ok(await dirSize(gitDir) > total, 'physical footprint includes overhead the logical total excludes');
+});
+
+// historySize/totalHistorySize count every historical blob reachable from
+// HEAD, not just the current tree — that's what makes the number match what
+// prune() actually reclaims, since prune's own rebuild (below) also only
+// replays reachable commit history. Saves alternate sources so each one
+// lands its own commit instead of amending the previous save away (the
+// amend window only fires when source AND path both repeat).
+test('historySize grows with each distinct saved version and shrinks back after prune', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-growth-');
+  const file = path.join(root, 'growth.md');
+
+  writeFileSync(file, 'v1 '.repeat(200));
+  await record(root, 'growth.md', 'user');
+  const afterFirst = await historySize(root);
+  assert.ok(afterFirst > 0);
+
+  writeFileSync(file, 'v2 grew a lot more than v1 '.repeat(400));
+  await record(root, 'growth.md', 'external');
+  const afterSecond = await historySize(root);
+  assert.ok(afterSecond > afterFirst, `expected growth: ${afterFirst} -> ${afterSecond}`);
+
+  writeFileSync(file, 'v3 grew even more than v2 did '.repeat(600));
+  await record(root, 'growth.md', 'restore');
+  const afterThird = await historySize(root);
+  assert.ok(afterThird > afterSecond, `expected growth: ${afterSecond} -> ${afterThird}`);
+
+  await prune(root);
+  assert.equal(await historySize(root), 0);
+});
+
+test('prune rebuilds the shared repo: the pruned folder\'s history is gone and its blobs are unreachable, kept paths survive', { skip: !git && 'git unavailable' }, async () => {
+  const keepRoot = realGitTmp('showmd-history-keep-');
+  const pruneRoot = realGitTmp('showmd-history-drop-');
+  writeFileSync(path.join(keepRoot, 'keep.md'), '# keep v1\n');
+  writeFileSync(path.join(pruneRoot, 'drop.md'), '# secret content to be pruned\n');
+  await record(keepRoot, 'keep.md', 'user');
+  await record(pruneRoot, 'drop.md', 'user');
+  writeFileSync(path.join(keepRoot, 'keep.md'), '# keep v2\n');
+  await record(keepRoot, 'keep.md', 'user');
+
+  const before = await timeline(keepRoot, 'keep.md');
+  assert.ok(before.length >= 1);
+  const droppedBefore = await timeline(pruneRoot, 'drop.md');
+  assert.ok(droppedBefore.length >= 1);
+
+  const gitDir = historyDirFor(pruneRoot);
+  const returned = await prune(pruneRoot);
+  assert.equal(returned, gitDir);
+
+  const droppedAfter = await timeline(pruneRoot, 'drop.md');
+  assert.deepEqual(droppedAfter, []);
+
+  // the rebuild replays into a fresh repo, so commit hashes are new even
+  // though the timeline's shape (count, timestamps, content) is preserved
+  const after = await timeline(keepRoot, 'keep.md');
+  assert.equal(after.length, before.length);
+  assert.deepEqual(after.map((e) => e.ts).sort(), before.map((e) => e.ts).sort());
+  assert.equal(await contentAt(keepRoot, 'keep.md', after[0].rev, false), '# keep v2\n');
+
+  // the rebuild swapped in a fresh repo, so the pruned blob's content must not
+  // be reachable from any object in the new repo's object store at all
+  const grep = execFileSync('git', ['--git-dir', gitDir, 'cat-file', '--batch-all-objects', '--batch-check=%(objectname)'], { encoding: 'utf8' })
+    .trim().split('\n').filter(Boolean);
+  const found = grep.some((sha) => {
+    try {
+      const content = execFileSync('git', ['--git-dir', gitDir, 'cat-file', 'blob', sha], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return content.includes('secret content to be pruned');
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(found, false, 'pruned blob content must be unreachable in the rebuilt repo\'s object store');
+});
+
+test('prune on a root with no shared repo yet is a harmless no-op', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-prune-missing-root-');
+  await pruneAll();
+  const dir = historyDirFor(root);
+  assert.ok(!existsSync(dir));
+  const returned = await prune(root);
+  assert.equal(returned, dir);
+  assert.ok(!existsSync(dir));
 });

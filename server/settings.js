@@ -2,6 +2,7 @@
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { randomUUID } = require('node:crypto');
 
 const DEFAULTS = {
   colorMode: 'system',
@@ -55,9 +56,16 @@ function settingsFile() {
 
 async function writeJSONAtomic(file, data) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  await fsp.writeFile(tmp, JSON.stringify(data, null, 2));
-  await fsp.rename(tmp, file);
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${randomUUID()}`;
+  try {
+    await fsp.writeFile(tmp, JSON.stringify(data, null, 2));
+    await fsp.rename(tmp, file);
+  } catch (error) {
+    // A failed write or rename can leave the staging file behind. Cleanup must
+    // stay best-effort so callers receive the original filesystem error.
+    await fsp.unlink(tmp).catch(() => {});
+    throw error;
+  }
 }
 
 async function readSettings() {

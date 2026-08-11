@@ -16,8 +16,6 @@ const { getSettingsView } = await import('../../server/settings-view.js');
 function view(overrides = {}) {
   return getSettingsView({
     platform: 'linux',
-    multi: false,
-    rootDir: workDir,
     mdHandlerDefaultFn: () => false,
     appStatusFn: () => ({ installed: false, stale: false, path: null }),
     effectiveSettingsPromise: Promise.resolve(settingsMod.DEFAULTS),
@@ -94,9 +92,12 @@ test('getSettingsView: updateChannel reflects the running cli path', async () =>
   assert.equal(npmGlobal.updateChannel, 'npm-global');
 });
 
-test('getSettingsView: multi=true reports historySizeBytes as null instead of scoping to a single root', async () => {
-  const body = await view({ multi: true });
-  assert.equal(body.historySizeBytes, null);
+// history sizes are slow prefix queries over the shadow git store; they moved
+// out to GET /api/history-size so the boot payload never waits on git
+test('getSettingsView: the boot payload carries no history size fields', async () => {
+  const body = await view();
+  assert.ok(!('historySizeBytes' in body));
+  assert.ok(!('historyTotalBytes' in body));
 });
 
 test('getSettingsView: update fields default to the "no update" shape before any refresh has run', async () => {
