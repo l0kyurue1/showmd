@@ -25,8 +25,7 @@ function isAlive(pid) {
 
 // a killed or crashed instance never gets to retract its own file, so each
 // announce sweeps the directory for dead pids instead of leaving it grow forever
-async function sweep() {
-  const dir = portsDir();
+async function sweep(dir = portsDir()) {
   let names;
   try {
     names = await fsp.readdir(dir);
@@ -40,15 +39,26 @@ async function sweep() {
 }
 
 async function announce(port, pid = process.pid) {
-  await sweep();
-  await settings.writeJSONAtomic(fileFor(pid), { port, pid });
+  // Capture the target before the first await. Tests and embedders may change
+  // SHOWMD_SETTINGS_HOME while this advisory write is in flight.
+  const file = fileFor(pid);
+  await sweep(path.dirname(file));
+  await settings.writeJSONAtomic(file, { port, pid });
+  return { file, port, pid };
 }
 
 // sync: called from server.js's 'close' handler right before process.exit,
 // which has no time left for an async fs op to settle
-function retract(pid = process.pid) {
+function retract(registration = process.pid) {
   try {
-    fs.rmSync(fileFor(pid), { force: true });
+    if (registration && typeof registration === 'object') {
+      const current = JSON.parse(fs.readFileSync(registration.file, 'utf8'));
+      if (current.pid !== registration.pid || current.port !== registration.port) return;
+      fs.rmSync(registration.file, { force: true });
+      return;
+    }
+    if (registration === null) return;
+    fs.rmSync(fileFor(registration), { force: true });
   } catch { /* advisory file */ }
 }
 

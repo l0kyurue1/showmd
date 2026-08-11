@@ -31,6 +31,11 @@ const MAX_CONTEXT_PROJECT_DIRS = 32;
 // Document verbs address one file inside a space; the rest of the query is the
 // space selection itself and stays under the route parser's strict grammar.
 const DOCUMENT_PARAMS = ['id', 'rev', 'repo'];
+const pendingServerCleanups = new Set();
+
+async function drainServerCleanups() {
+  while (pendingServerCleanups.size) await Promise.allSettled(pendingServerCleanups);
+}
 
 function installFnFor(platform) {
   return { darwin: installers.installApp, win32: installers.installAppWin, linux: installers.installAppLinux }[platform] || null;
@@ -373,7 +378,7 @@ function createServer(root, {
       cwd: process.cwd(),
       env: { ...process.env, SHOWMD_INSTANCE_ID: newInstanceId, SHOWMD_RESTART_HANDOFF: snapshotPath },
     }).unref();
-    server.close(() => exitFn(0));
+    server.close(() => server.whenClosed().then(() => exitFn(0)));
     // as in /api/shutdown: a keep-alive socket or a missed SSE stream would
     // otherwise block close()'s callback forever
     server.closeAllConnections();
@@ -663,7 +668,7 @@ function createServer(root, {
       res.once('finish', () => {
         // close() waits for every socket to drain; keep-alive sockets and open
         // SSE streams never do, so destroy them or 'close' never fires
-        server.close(() => exitFn(0));
+        server.close(() => server.whenClosed().then(() => exitFn(0)));
         server.closeAllConnections();
       });
     } },
@@ -729,6 +734,7 @@ function createServer(root, {
       if (doc) {
         await recordRecent(path.join(dir, doc));
         routeContext.documentPath = result.scope.scopePath ? `${result.scope.scopePath}/${doc}` : doc;
+        if (result.scope.scopePath) routeContext.scopePath = result.scope.scopePath;
       } else if (result.scope.scopePath) {
         routeContext.scopePath = result.scope.scopePath;
       }
@@ -940,22 +946,32 @@ function createServer(root, {
       if (!res.headersSent) sendJSON(res, 500, { error: 'internal error' });
     }
   });
+  let resolveServerCleanup;
+  const serverCleanup = new Promise((resolve) => { resolveServerCleanup = resolve; });
+  pendingServerCleanups.add(serverCleanup);
+  serverCleanup.finally(() => pendingServerCleanups.delete(serverCleanup));
+  server.whenClosed = () => serverCleanup;
+  let announcePromise = Promise.resolve(null);
 
   // advisory, for external launchers that need to find a live instance;
   // showmd never reads it back to pick its own port
   server.on('listening', () => {
-    ports.announce(server.address().port).catch(() => {});
+    announcePromise = ports.announce(server.address().port).catch(() => null);
   });
 
   server.on('close', () => {
-    bootRootReady.then(() => {
-      for (const root of rootManager.list()) rootManager.remove(root.key).catch(() => {});
-    });
     for (const res of sseClients) res.end();
-    ports.retract();
+    Promise.allSettled([
+      announcePromise,
+      recentsWrite,
+      bootRootReady.then(() => Promise.all(rootManager.list().map((openRoot) => rootManager.remove(openRoot.key)))),
+    ]).then(([announcement]) => {
+      if (announcement.status === 'fulfilled') ports.retract(announcement.value);
+      resolveServerCleanup();
+    });
   });
 
   return server;
 }
 
-module.exports = { createServer, restartArgv, findRoute, broadcastSSE };
+module.exports = { createServer, restartArgv, findRoute, broadcastSSE, drainServerCleanups };

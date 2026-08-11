@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,8 +20,11 @@ writeFileSync(filePath, '# hi\n');
 const settingsHome = path.join(workDir, 'settings-home');
 mkdirSync(settingsHome, { recursive: true });
 // updateCheck off: this spawns the real CLI, and the update check is the one
-// outbound call showmd can make — npm test needs no network
-writeFileSync(path.join(settingsHome, 'settings.json'), JSON.stringify({ updateCheck: false }));
+// outbound call showmd can make — npm test needs no network. A pinned free
+// port keeps every test sharing this settings home off the real default port
+// (4321), which a real showmd instance on this machine may already hold
+const defaultTestPort = await getFreePort();
+writeFileSync(path.join(settingsHome, 'settings.json'), JSON.stringify({ updateCheck: false, port: defaultTestPort }));
 const childEnv = { ...process.env, SHOWMD_SETTINGS_HOME: settingsHome };
 
 function spawnCli(extraArgs) {
@@ -41,6 +44,12 @@ function extractUrl(stdout) {
   return m ? { url: m[0], port: Number(m[1]) } : null;
 }
 
+async function bootData(base) {
+  const html = await (await fetch(base)).text();
+  const match = html.match(/<script type="application\/json" id="boot-data">(.*?)<\/script>/s);
+  return JSON.parse(match[1]);
+}
+
 async function waitFor(predicate, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -49,6 +58,15 @@ async function waitFor(predicate, timeoutMs = 5000) {
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error('condition not met in time');
+}
+
+// a child that already exited has already emitted 'close'; a listener
+// attached after that fires never sees it and awaits forever
+function waitForClose(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve(child.exitCode);
+    child.once('close', (code) => resolve(code));
+  });
 }
 
 function killAndWait(child) {
@@ -72,24 +90,85 @@ function getFreePort() {
 
 test.after(() => rmSync(workDir, { recursive: true, force: true }));
 
-test('default-port collision: two instances get distinct ports, both serve 200', async () => {
+// a second invocation that asks for nothing dedicated is a capability client, not
+// another server. It discovers the live primary through the Registry, adds
+// its target via POST /api/roots,
+// prints/opens the returned URL on the FIRST server's port, and exits.
+test('two sequential invocations reuse one process: second reuses the first, both roots live', async () => {
   let a = null;
   let b = null;
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-reuse-home-')));
+  const secondDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-reuse-second-')));
   try {
-    // default port may already be taken on this machine; assert distinct+alive ports, not an exact number
-    a = spawnCli([]);
-    const infoA = await waitFor(() => extractUrl(a.state.stdout));
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+    const secondFile = path.join(secondDir, 'second.md');
+    writeFileSync(secondFile, '# second\n');
 
-    b = spawnCli([]);
+    a = spawnCliArgs([filePath, '--no-open'], { env });
+    const infoA = await waitFor(() => extractUrl(a.state.stdout));
+    assert.equal(infoA.port, pinnedPort, 'first instance takes the pinned default port as primary');
+
+    b = spawnCliArgs([secondFile, '--no-open'], { env });
     const infoB = await waitFor(() => extractUrl(b.state.stdout));
-    assert.notEqual(infoB.port, infoA.port, 'second instance falls back to a different (ephemeral) port');
+    assert.equal(infoB.port, pinnedPort, 'second instance reuses the first process instead of booting its own');
+
+    const bExitCode = await waitForClose(b.child);
+    assert.equal(bExitCode, 0, 'the reusing invocation exits after handing its target to the primary');
+
+    const roots = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/roots`)).json();
+    assert.equal(roots.roots.length, 2, 'both roots are live on the one process');
 
     const [resA, resB] = await Promise.all([fetch(infoA.url), fetch(infoB.url)]);
-    assert.equal(resA.status, 200, 'first instance responds 200');
-    assert.equal(resB.status, 200, 'second instance responds 200');
-    console.log(`criterion PASS: default-port collision -> instance A on ${infoA.port}, instance B fell back to ${infoB.port}, both 200`);
+    assert.equal(resA.status, 200, 'first root serves 200');
+    assert.equal(resB.status, 200, 'second root serves 200 on the same process');
+    console.log(`criterion PASS: two sequential invocations -> one process on ${pinnedPort}, two roots, both 200`);
   } finally {
     await Promise.all([a, b].filter(Boolean).map((p) => killAndWait(p.child)));
+    rmSync(home, { recursive: true, force: true });
+    rmSync(secondDir, { recursive: true, force: true });
+  }
+});
+
+// the inverse of the reuse test above: --new (and its --dedicated alias) opts
+// an invocation out of the Registry search, so it boots its own process and
+// announces mode 'dedicated', which keeps it out of every later reuse search
+test('--new and --dedicated boot their own process instead of reusing the shared one', async () => {
+  const spawned = [];
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-dedicated-home-')));
+  const targetDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-dedicated-target-')));
+  try {
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+    const targetFile = path.join(targetDir, 'target.md');
+    writeFileSync(targetFile, '# target\n');
+
+    const shared = spawnCliArgs([filePath, '--no-open'], { env });
+    spawned.push(shared);
+    const infoShared = await waitFor(() => extractUrl(shared.state.stdout));
+    assert.equal(infoShared.port, pinnedPort, 'the first instance holds the pinned port');
+    const versionShared = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/version`)).json();
+    assert.equal(versionShared.mode, 'shared', 'a plain invocation announces itself as shared');
+
+    for (const flag of ['--new', '--dedicated']) {
+      const own = spawnCliArgs([targetFile, '--no-open', flag], { env });
+      spawned.push(own);
+      const info = await waitFor(() => extractUrl(own.state.stdout));
+      assert.notEqual(info.port, pinnedPort, `${flag} does not land on the shared process's port`);
+      const version = await (await fetch(`http://127.0.0.1:${info.port}/api/version`)).json();
+      assert.equal(version.mode, 'dedicated', `${flag} announces mode dedicated`);
+      assert.equal((await fetch(info.url)).status, 200, `${flag} serves its own target`);
+    }
+
+    const roots = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/roots`)).json();
+    assert.equal(roots.roots.length, 1, 'no dedicated instance handed its root to the shared process');
+    console.log('criterion PASS: --new and --dedicated each boot a dedicated process; shared process keeps its one root');
+  } finally {
+    await Promise.all(spawned.map((p) => killAndWait(p.child)));
+    rmSync(home, { recursive: true, force: true });
+    rmSync(targetDir, { recursive: true, force: true });
   }
 });
 
@@ -126,15 +205,14 @@ test('a stale showmd on the default port is replaced, not yielded to', async () 
   }
 });
 
-test('silent default-port fallback names the squatter first, since it is another showmd', async () => {
+// same target twice: POST /api/roots dedupes to the already-open root
+// (root-manager.test.mjs/roots.test.mjs cover the dedupe itself), so the
+// second invocation's URL matches the first's exactly, not a new Scope
+test('a second invocation of the same target dedupes to the already-open root', async () => {
   let a = null;
   let b = null;
-  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-warn-home-')));
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-dedupe-home-')));
   try {
-    // a dedicated free port pinned via settings.json, not the real 4321 — this
-    // machine may already have an unrelated showmd (possibly predating
-    // /api/version) squatting there, which would make the probe silently
-    // come back empty and the assertion below flaky
     const pinnedPort = await getFreePort();
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
     const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
@@ -145,12 +223,56 @@ test('silent default-port fallback names the squatter first, since it is another
 
     b = spawnCliArgs([filePath, '--no-open'], { env });
     const infoB = await waitFor(() => extractUrl(b.state.stdout));
-    assert.notEqual(infoB.port, pinnedPort, 'second instance falls back off the pinned port');
+    assert.equal(infoB.url, infoA.url, 'the dedupe returns the identical root URL, not a new one');
 
-    assert.match(b.state.stderr, new RegExp(`showmd: port ${pinnedPort} is held by showmd \\S+`), 'the loser names the squatter (instance A) before falling back');
+    const roots = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/roots`)).json();
+    assert.equal(roots.roots.length, 1, 'the duplicate target did not open a second root');
+    console.log(`criterion PASS: duplicate target on ${pinnedPort} deduped to ${infoA.url}`);
   } finally {
     await Promise.all([a, b].filter(Boolean).map((p) => killAndWait(p.child)));
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// concurrent cold start (CLI and concurrent start, step 7): both invocations
+// find no live primary at discovery time and race the bind; the loser gets
+// EADDRINUSE, re-probes, and hands its target to the winner instead of
+// falling back to an ephemeral, unreachable-by-the-other-tab process
+test('two concurrent cold starts: exactly one primary survives, both targets are served', async () => {
+  let a = null;
+  let b = null;
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-concurrent-home-')));
+  const dirA = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-concurrent-a-')));
+  const dirB = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-concurrent-b-')));
+  try {
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+    const fileA = path.join(dirA, 'a.md');
+    const fileB = path.join(dirB, 'b.md');
+    writeFileSync(fileA, '# a\n');
+    writeFileSync(fileB, '# b\n');
+
+    a = spawnCliArgs([fileA, '--no-open'], { env });
+    b = spawnCliArgs([fileB, '--no-open'], { env });
+    const [infoA, infoB] = await Promise.all([
+      waitFor(() => extractUrl(a.state.stdout), 10000),
+      waitFor(() => extractUrl(b.state.stdout), 10000),
+    ]);
+
+    assert.equal(infoA.port, infoB.port, 'both invocations converge on one compatible primary port');
+
+    const [resA, resB] = await Promise.all([fetch(infoA.url), fetch(infoB.url)]);
+    assert.equal(resA.status, 200, 'target A serves 200');
+    assert.equal(resB.status, 200, 'target B serves 200');
+    const roots = await (await fetch(`http://127.0.0.1:${infoA.port}/api/roots`)).json();
+    assert.equal(roots.roots.length, 2, 'both targets are live roots on the surviving primary');
+    console.log(`criterion PASS: concurrent cold start -> one primary on ${infoA.port}, both targets served`);
+  } finally {
+    await Promise.all([a, b].filter(Boolean).map((p) => killAndWait(p.child)));
+    rmSync(home, { recursive: true, force: true });
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
   }
 });
 
@@ -218,7 +340,7 @@ test('install-skill: exits 0 and lands SKILL.md under a fake HOME', async () => 
   }
 });
 
-test('--launcher --no-open: boots with no root; /api/root gives dir null', async () => {
+test('--launcher --no-open: boots with no root; boot data gives dir null', async () => {
   let p = null;
   // a pinned free port + own settings home: the default port may already be
   // held by a real, same-version showmd launcher (e.g. the installed app),
@@ -231,12 +353,46 @@ test('--launcher --no-open: boots with no root; /api/root gives dir null', async
     p = spawnCliArgs(['--launcher', '--no-open'], { env });
     const info = await waitFor(() => extractUrl(p.state.stdout));
     assert.match(p.state.stdout, /showmd launcher/);
-    const res = await fetch(`http://127.0.0.1:${info.port}/api/root`);
-    assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { dir: null, launchedFrom: 'terminal' });
+    const boot = await bootData(`http://127.0.0.1:${info.port}/`);
+    assert.deepEqual(boot.root, { dir: null, launchedFrom: 'terminal' });
     console.log('criterion PASS: --launcher boots with dir:null');
   } finally {
     if (p) await killAndWait(p.child);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Spec 3 regression: --launcher used to probe only its own configured port,
+// so a rooted shared server on a different port was invisible to it and got
+// a second, duplicate process. It now asks the Registry via discoverPrimary,
+// the same selection GET /api/registry serves.
+test('--launcher reuses an already-running rooted shared server on a different port', async () => {
+  let a = null;
+  let b = null;
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-launcher-reuse-home-')));
+  try {
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+
+    a = spawnCliArgs([filePath, '--no-open'], { env });
+    const infoA = await waitFor(() => extractUrl(a.state.stdout));
+    assert.equal(infoA.port, pinnedPort, 'first instance boots as the shared server on the pinned port');
+
+    // an explicit --port would force a dedicated boot, so leave args.port at its
+    // settings.json default (pinnedPort) instead
+    b = spawnCliArgs(['--launcher', '--no-open'], { env });
+    const infoB = await waitFor(() => extractUrl(b.state.stdout));
+    assert.equal(infoB.port, pinnedPort, '--launcher reused the already-rooted shared server instead of booting a second one');
+
+    const bExitCode = await waitForClose(b.child);
+    assert.equal(bExitCode, 0, 'the reusing --launcher invocation exits after printing the reused URL');
+
+    const roots = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/roots`)).json();
+    assert.equal(roots.roots.length, 1, '--launcher did not add a root of its own');
+    console.log(`criterion PASS: --launcher reused the rooted shared server on ${pinnedPort} instead of spawning a duplicate`);
+  } finally {
+    await Promise.all([a, b].filter(Boolean).map((p) => killAndWait(p.child)));
     rmSync(home, { recursive: true, force: true });
   }
 });
@@ -254,13 +410,17 @@ test('root classification matches the Document Store: .markdown and uppercase .M
   try {
     p = spawnCliArgs([dotMarkdown, '--no-open'], { env: childEnv });
     const info = await waitFor(() => extractUrl(p.state.stdout));
-    const res = await fetch(`http://127.0.0.1:${info.port}/api/raw?path=${encodeURIComponent('notes.markdown')}`);
+    const base = `http://127.0.0.1:${info.port}`;
+    const key = (await (await fetch(`${base}/api/roots`)).json()).roots[0].key;
+    const res = await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('notes.markdown')}`);
     assert.equal(res.status, 200, '.markdown file boots and serves');
     await killAndWait(p.child);
 
     p = spawnCliArgs([upperMd, '--no-open'], { env: childEnv });
     const infoUpper = await waitFor(() => extractUrl(p.state.stdout));
-    const resUpper = await fetch(`http://127.0.0.1:${infoUpper.port}/api/raw?path=${encodeURIComponent('README.MD')}`);
+    const baseUpper = `http://127.0.0.1:${infoUpper.port}`;
+    const keyUpper = (await (await fetch(`${baseUpper}/api/roots`)).json()).roots[0].key;
+    const resUpper = await fetch(`${baseUpper}/api/roots/${keyUpper}/raw?path=${encodeURIComponent('README.MD')}`);
     assert.equal(resUpper.status, 200, 'uppercase .MD file boots and serves');
     await killAndWait(p.child);
 
@@ -293,14 +453,13 @@ test('bare `showmd` (no args) in a tmp dir still serves that dir', async () => {
   writeFileSync(path.join(cwdDir, 'bare.md'), '# bare\n');
   let p = null;
   try {
-    p = spawnCliArgs(['--no-open'], { cwd: cwdDir });
+    p = spawnCliArgs(['--no-open'], { cwd: cwdDir, env: childEnv });
     const info = await waitFor(() => extractUrl(p.state.stdout));
-    const res = await fetch(`http://127.0.0.1:${info.port}/api/root`);
-    assert.equal(res.status, 200);
+    const boot = await bootData(`http://127.0.0.1:${info.port}/`);
     // realpath: the child's process.cwd() resolves symlinks (e.g. macOS's
     // /tmp -> /private/tmp) the same way, so compare against that, not the
     // pre-resolved tmpdir() path this test built cwdDir from
-    assert.deepEqual(await res.json(), { dir: realpathSync(cwdDir), name: path.basename(cwdDir), launchedFrom: 'terminal' });
+    assert.deepEqual(boot.root, { dir: realpathSync(cwdDir), name: path.basename(cwdDir), launchedFrom: 'terminal' });
     console.log('criterion PASS: bare showmd serves cwd unchanged');
   } finally {
     if (p) await killAndWait(p.child);
@@ -315,17 +474,60 @@ test('a browser that is not installed does not take the server down', async () =
   let p = null;
   try {
     writeFileSync(path.join(home, 'settings.json'),
-      JSON.stringify({ updateCheck: false, browser: 'showmd-no-such-browser' }));
+      JSON.stringify({ updateCheck: false, browser: 'showmd-no-such-browser', port: await getFreePort() }));
     p = spawnCliArgs([filePath], { env: { ...process.env, SHOWMD_SETTINGS_HOME: home } });
     const info = await waitFor(() => extractUrl(p.state.stdout));
 
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(p.child.exitCode, null, `server exited: ${p.state.stderr}`);
-    const res = await fetch(`http://127.0.0.1:${info.port}/api/root`);
+    const res = await fetch(`http://127.0.0.1:${info.port}/`);
     assert.equal(res.status, 200, 'still serving after the failed browser launch');
     console.log('criterion PASS: unspawnable browser is survivable');
   } finally {
     if (p) await killAndWait(p.child);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/shutdown: process exits cleanly and its registry entry is written then removed', async () => {
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-shutdown-')));
+  let p = null;
+  try {
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: await getFreePort() }));
+    p = spawnCliArgs([filePath, '--no-open'], { env: { ...process.env, SHOWMD_SETTINGS_HOME: home } });
+    const info = await waitFor(() => extractUrl(p.state.stdout));
+    const announceFile = path.join(home, 'ports', `${p.child.pid}.json`);
+    await waitFor(() => existsSync(announceFile));
+    assert.deepEqual(JSON.parse(readFileSync(announceFile, 'utf8')), { port: info.port, pid: p.child.pid });
+
+    const res = await fetch(`http://127.0.0.1:${info.port}/api/shutdown`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+
+    await new Promise((resolve) => p.child.once('exit', resolve));
+    assert.ok(!existsSync(announceFile), 'registry entry removed after shutdown');
+    console.log('criterion PASS: /api/shutdown stops the process and cleans up its registry entry');
+  } finally {
+    if (p && p.child.exitCode === null && p.child.signalCode === null) await killAndWait(p.child);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('SIGTERM: process exits and removes its registry entry', async () => {
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-sigterm-')));
+  let p = null;
+  try {
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: await getFreePort() }));
+    p = spawnCliArgs([filePath, '--no-open'], { env: { ...process.env, SHOWMD_SETTINGS_HOME: home } });
+    await waitFor(() => extractUrl(p.state.stdout));
+    const announceFile = path.join(home, 'ports', `${p.child.pid}.json`);
+    await waitFor(() => existsSync(announceFile));
+
+    p.child.kill('SIGTERM');
+    await new Promise((resolve) => p.child.once('exit', resolve));
+    assert.ok(!existsSync(announceFile), 'registry entry removed after SIGTERM');
+    console.log('criterion PASS: SIGTERM cleans up its registry entry');
+  } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });

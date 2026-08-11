@@ -37,7 +37,7 @@ export interface RootScope {
 export type RootAddResult =
   | { kind: 'added'; root: Root; scope: RootScope }
   | { kind: 'existing'; root: Root; scope: RootScope }
-  | { kind: 'ancestor_conflict'; fallback: 'isolated'; target: Root; conflictingRoots: Root[] };
+  | { kind: 'ancestor_conflict'; fallback: 'dedicated'; target: Root; conflictingRoots: Root[] };
 
 export type RootRelation = 'same' | 'ancestor' | 'descendant' | 'disjoint';
 
