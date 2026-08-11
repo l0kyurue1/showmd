@@ -171,6 +171,8 @@ nav .rowtext-track {
   overflow: hidden; text-overflow: ellipsis;
 }
 nav li.marqueeing .rowtext-track { max-width: none; overflow: visible; text-overflow: clip; }
+nav .rowtext-dir { color: var(--faint); }
+nav li.on .rowtext-dir { color: color-mix(in srgb, var(--muted), var(--faint)); }
 
 nav li.kbd-on:not(.on)::before {
   content: ''; position: absolute; inset: 0; left: calc(var(--indent) - 6px); z-index: -1;
@@ -192,6 +194,12 @@ nav .sec {
 }
 nav .sec:first-child { margin-top: 2px; }
 nav .sec:hover { color: var(--ink); background: var(--hover); }
+nav .sec-label-prefix { color: var(--faint); transition: color .15s; }
+nav .sec-label-name { color: color-mix(in srgb, var(--muted), var(--faint)); transition: color .15s; }
+nav .sec:hover .sec-label-prefix {
+  color: color-mix(in srgb, var(--muted), var(--faint));
+}
+nav .sec:hover .sec-label-name { color: var(--ink); }
 nav .sec.sec-scope {
   font-size: 12px; text-transform: none; letter-spacing: 0; font-weight: 650;
   color: var(--ink); padding-top: 10px;

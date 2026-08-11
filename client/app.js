@@ -940,18 +940,43 @@ function makeDisclosureHeader(row, variant) {
   header.appendChild(chevron);
   const label = document.createElement('span');
   label.className = 'sec-label';
-  label.textContent = row.label;
+  if (row.labelParts) {
+    const { prefix, name } = row.labelParts;
+    if (prefix) {
+      const prefixEl = document.createElement('span');
+      prefixEl.className = 'sec-label-prefix';
+      prefixEl.textContent = prefix;
+      label.appendChild(prefixEl);
+    }
+    const nameEl = document.createElement('span');
+    nameEl.className = 'sec-label-name';
+    nameEl.textContent = name;
+    label.appendChild(nameEl);
+  } else {
+    label.textContent = row.label;
+  }
   header.appendChild(label);
   header.addEventListener('click', () => toggleAndRender(row.nodeId));
   return header;
 }
 
-function makeRowText(text) {
+function makeRowText(text, labelParts) {
   const inner = document.createElement('span');
   inner.className = 'rowtext';
   const track = document.createElement('span');
   track.className = 'rowtext-track';
-  track.textContent = text;
+  if (labelParts) {
+    const dirEl = document.createElement('span');
+    dirEl.className = 'rowtext-dir';
+    dirEl.textContent = labelParts.dir;
+    track.appendChild(dirEl);
+    const baseEl = document.createElement('span');
+    baseEl.className = 'rowtext-base';
+    baseEl.textContent = labelParts.base;
+    track.appendChild(baseEl);
+  } else {
+    track.textContent = text;
+  }
   inner.appendChild(track);
   return inner;
 }
@@ -1001,7 +1026,7 @@ function makeFileItem(row) {
   li.className = classes.join(' ');
   li.dataset.navId = row.id;
   li.dataset.navDepth = String(row.depth);
-  const inner = makeRowText(row.label);
+  const inner = makeRowText(row.label, row.labelParts);
   li.appendChild(inner);
   if (reducedMotion()) li.title = row.label;
   if (row.current) li.classList.add('on');

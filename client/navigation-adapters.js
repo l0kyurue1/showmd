@@ -9,6 +9,15 @@ function fileNode(documentId, label) {
   };
 }
 
+function splitDirLabel(directory) {
+  const withoutSlash = directory.slice(0, -1);
+  const lastSlash = withoutSlash.lastIndexOf('/');
+  return {
+    prefix: lastSlash === -1 ? '' : withoutSlash.slice(0, lastSlash + 1),
+    name: lastSlash === -1 ? withoutSlash : withoutSlash.slice(lastSlash + 1),
+  };
+}
+
 export function adaptFilesTree(data) {
   const byDirectory = new Map();
   for (const documentId of data.tree) {
@@ -28,7 +37,8 @@ export function adaptFilesTree(data) {
     roots.push({
       key: `dir:${directory}`,
       role: 'dir',
-      label: directory,
+      label: directory.slice(0, -1),
+      labelParts: splitDirLabel(directory),
       children: documents.map((documentId) => fileNode(documentId, documentId.slice(directory.length))),
       initiallyCollapsed: false,
     });

@@ -59,11 +59,18 @@ export function expandAncestors(collapsed, model, documentId) {
   return collapsed;
 }
 
+function splitSearchLabel(documentId) {
+  const slash = documentId.lastIndexOf('/');
+  if (slash === -1) return null;
+  return { dir: documentId.slice(0, slash + 1), base: documentId.slice(slash + 1) };
+}
+
 function rowFor(node, { depth, listKey, collapsed, file, ancestors, search = false, filesModel = false }) {
   const collapsible = node.children.length > 0;
   const isCollapsed = !search && collapsible && collapsed.has(node.key);
   const ancestorRoles = ancestors.map((item) => item.role);
   const id = node.documentId || node.key;
+  const searchLabel = search && filesModel && node.documentId;
   return {
     kind: search && node.metadata?.searchResultRole ? node.metadata.searchResultRole : node.role,
     id,
@@ -72,7 +79,9 @@ function rowFor(node, { depth, listKey, collapsed, file, ancestors, search = fal
     listKey,
     label: search && node.metadata?.searchResultLabel
       ? node.metadata.searchResultLabel
-      : (search && filesModel && node.documentId ? node.documentId : node.label),
+      : (searchLabel ? node.documentId : node.label),
+    ...(searchLabel ? { labelParts: splitSearchLabel(node.documentId) } : {}),
+    ...(!search && node.role === 'dir' && node.labelParts ? { labelParts: node.labelParts } : {}),
     nested: node.role === 'file' && depth > 0,
     ...(node.role === 'file' && (ancestorRoles.includes('skill') || ancestorRoles.includes('project')) ? { underSkill: true } : {}),
     collapsible,
