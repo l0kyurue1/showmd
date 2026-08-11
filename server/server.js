@@ -1,5 +1,6 @@
 'use strict';
 const http = require('node:http');
+const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -13,6 +14,8 @@ const ports = require('./ports.js');
 const { discoverRegistry } = require('./registry.js');
 const recents = require('./recents.js');
 const { getSettingsView } = require('./settings-view.js');
+const updateCheck = require('./update-check.js');
+const { createUpdateController } = require('./updater.js');
 const history = require('./history.js');
 const installers = require('./install-app.js');
 const { resolveContext, rootInfo } = require('./route-request.js');
@@ -79,6 +82,20 @@ for (const rel of [
 const KATEX_FONTS_DIR = path.join(VENDOR_DIR, 'katex', 'fonts');
 const FONT_MIME = { '.woff2': 'font/woff2' };
 
+// Package managers replace files in place. Keep every shell and lazy asset on
+// the build this process booted with so an old server can never serve a newer,
+// incompatible client halfway through an upgrade.
+function snapshotTree(dir, base = dir, out = new Map()) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) snapshotTree(full, base, out);
+    else if (entry.isFile()) out.set(path.relative(base, full).split(path.sep).join('/'), fs.readFileSync(full));
+  }
+  return out;
+}
+
+const CLIENT_BUILD = snapshotTree(CLIENT_DIR);
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const ERROR_STATUS = {
@@ -123,6 +140,13 @@ async function sendFileOr404(res, filePath, contentType, headers = {}) {
   } catch {
     return sendError(res, { code: 'not_found' });
   }
+}
+
+function sendBuildAssetOr404(res, rel, contentType, headers = {}) {
+  const body = CLIENT_BUILD.get(rel);
+  if (!body) return sendError(res, { code: 'not_found' });
+  res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': body.length, ...headers });
+  return res.end(body);
 }
 
 function shapeRootSummary(root) {
@@ -223,7 +247,8 @@ function createServer(root, {
   skillsContexts = [], revealFile = defaultRevealFile, openInfoFn = defaultOpenInfoWindow, platform = process.platform, warmPickerOnStart = false,
   installFn, appStatusFn, registerMdFn, restartFn, mdHandlerDefaultFn, folderPickerFactory = createFolderPicker, initialDoc = null,
   cliPath = process.argv[1] || '', selfHealOnBoot = false, selfHealFn, exitFn = process.exit, mode = DEFAULT_MODE,
-  launchDetachedFn = proc.launchDetached, statFn = fsp.stat,
+  launchDetachedFn = proc.launchDetached, statFn = fsp.stat, updateRunFn,
+  updateOnVerifiedFn, updateInfoFn = updateCheck.updateInfo,
 } = {}) {
   const folderPicker = folderPickerFactory({ platform });
   if (warmPickerOnStart && platform === 'darwin') folderPicker.warm();
@@ -304,6 +329,7 @@ function createServer(root, {
   // guards /api/shutdown and /api/restart against firing twice on concurrent
   // requests — both end the process, so a second call is a no-op, not an error
   let stopping = false;
+  let updateToken = randomUUID();
 
   // Serialize Recents writes so reads never overtake boot recording.
   let recentsWrite = Promise.resolve();
@@ -341,33 +367,67 @@ function createServer(root, {
   }
 
   // Snapshot roots and Skills contexts for the detached replacement process.
-  async function defaultRestart() {
-    const argv = restartArgv(process.argv.slice(1));
-    const newInstanceId = randomUUID();
-    const snapshotPath = path.join(restartDir(), `restart-${newInstanceId}.json`);
+  async function writeRuntimeHandoff(newInstance) {
+    const snapshotPath = path.join(restartDir(), `restart-${newInstance.instanceId}.json`);
     const metadata = getInstanceMetadata();
     const state = {
       oldInstance: { instanceId: metadata.instanceId, pid: process.pid, startedAt: metadata.startedAt, actualPort: server.address().port },
-      // Adoption matches instanceId, so PID may be a placeholder before spawn.
-      newInstance: { instanceId: newInstanceId, pid: 1, startedAt: new Date().toISOString() },
+      newInstance,
       roots: rootManager.list(),
       skillsContexts: skillsContextRegistry.list(),
     };
+    await writeRestartHandoff(snapshotPath, state);
+    return snapshotPath;
+  }
+
+  async function defaultRestart(replacementLaunch = null, beforeClose = null) {
+    const argv = replacementLaunch
+      ? [...replacementLaunch.prefixArgs, ...restartArgv(process.argv.slice(2))]
+      : restartArgv(process.argv.slice(1));
+    const command = replacementLaunch ? replacementLaunch.command : process.execPath;
+    const newInstanceId = randomUUID();
+    let snapshotPath;
     try {
-      await writeRestartHandoff(snapshotPath, state);
+      snapshotPath = await writeRuntimeHandoff({
+        instanceId: newInstanceId,
+        // Adoption matches instanceId, so PID may be a placeholder before spawn.
+        pid: 1,
+        startedAt: new Date().toISOString(),
+      });
     } catch (err) {
       console.error(`showmd: failed to write restart handoff: ${err.message}`);
+      if (replacementLaunch) throw err;
     }
-    launchDetachedFn(process.execPath, argv, {
+    launchDetachedFn(command, argv, {
       cwd: process.cwd(),
       env: { ...process.env, SHOWMD_INSTANCE_ID: newInstanceId, SHOWMD_RESTART_HANDOFF: snapshotPath },
     }).unref();
+    if (beforeClose) beforeClose();
     server.close(() => server.whenClosed().then(() => exitFn(0)));
     // as in /api/shutdown: a keep-alive socket or a missed SSE stream would
     // otherwise block close()'s callback forever
     server.closeAllConnections();
   }
   const restart = restartFn || defaultRestart;
+  const updateController = createUpdateController({
+    channel: installers.installChannel(cliPath),
+    cliPath,
+    ...(updateRunFn ? { run: updateRunFn } : {}),
+    onVerified: async (result) => {
+      if (updateOnVerifiedFn) return updateOnVerifiedFn(result);
+      stopping = true;
+      try {
+        const { port: replacementPort } = await settings.readSettings();
+        await defaultRestart(result.launch, () => {
+          broadcastSSE(sseClients, { event: 'server-restarting', port: replacementPort });
+          for (const client of sseClients) client.end();
+        });
+      } catch (err) {
+        stopping = false;
+        throw err;
+      }
+    },
+  });
 
   const routeResolutionDependencies = createRouteResolutionDependencies({ rootManager, skillsContextRegistry });
 
@@ -527,6 +587,22 @@ function createServer(root, {
       }));
     } },
 
+    { method: 'GET', match: (pathname) => pathname === '/api/update', handler: async (ctx) => {
+      return sendJSON(ctx.res, 200, updateController.getState());
+    } },
+
+    { method: 'POST', match: (pathname) => pathname === '/api/update', needs: ['body'], handler: async (ctx) => {
+      const { res, body } = ctx;
+      if (body.token !== updateToken) return sendJSON(res, 403, { error: 'invalid update token' });
+      const available = updateInfoFn();
+      if (!available.updateAvailable || !available.latestVersion) {
+        return sendJSON(res, 409, { error: 'no update available' });
+      }
+      updateToken = randomUUID();
+      const result = updateController.start(available.latestVersion);
+      return sendJSON(res, result.started ? 202 : 200, { ...result.state, token: updateToken });
+    } },
+
     // Any live server returns the same ordered registry.
     { method: 'GET', match: (pathname) => pathname === '/api/registry', handler: async (ctx) => {
       const configuredPortParam = ctx.url.searchParams.get('configuredPort');
@@ -540,7 +616,7 @@ function createServer(root, {
       const key = url.searchParams.get('root');
       if (key && !rootScopedRootOr404(res, key)) return;
       return sendJSON(res, 200, await getSettingsView({
-        platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath,
+        platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath, updateToken,
       }));
     } },
 
@@ -628,6 +704,39 @@ function createServer(root, {
         })
         .catch(() => {})
         .finally(() => setImmediate(restart));
+    } },
+
+    // A newly invoked CLI can take ownership itself. The request names only
+    // its identity; the running process chooses the snapshot path and executes
+    // no browser-supplied program or arguments.
+    { method: 'POST', match: (pathname) => pathname === '/api/runtime-handoff', needs: ['body'], handler: async (ctx) => {
+      const { res, body } = ctx;
+      const validId = typeof body.instanceId === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.instanceId);
+      const validPid = Number.isInteger(body.pid) && body.pid > 0 && body.pid <= 0x7fffffff;
+      const validStartedAt = typeof body.startedAt === 'string' && !Number.isNaN(Date.parse(body.startedAt));
+      if (!validId || !validPid || !validStartedAt) return sendJSON(res, 400, { error: 'invalid replacement identity' });
+      if (stopping) return sendJSON(res, 409, { error: 'already stopping' });
+
+      let snapshotPath;
+      try {
+        snapshotPath = await writeRuntimeHandoff({
+          instanceId: body.instanceId,
+          pid: body.pid,
+          startedAt: body.startedAt,
+        });
+      } catch (err) {
+        return sendJSON(res, 500, { error: 'handoff failed' });
+      }
+
+      stopping = true;
+      sendJSON(res, 200, { handoffPath: snapshotPath, port: server.address().port });
+      broadcastSSE(sseClients, { event: 'server-restarting', port: server.address().port });
+      for (const client of sseClients) client.end();
+      res.once('finish', () => {
+        server.close(() => server.whenClosed().then(() => exitFn(0)));
+        server.closeAllConnections();
+      });
     } },
 
     { method: 'POST', match: (pathname) => pathname === '/api/shutdown', handler: async (ctx) => {
@@ -817,7 +926,7 @@ function createServer(root, {
       const rel = pathname.slice('/assets/vendor/'.length);
       const entry = VENDOR_FILES[rel];
       if (entry) {
-        return await sendFileOr404(res, entry.file, entry.type);
+        return sendBuildAssetOr404(res, path.relative(CLIENT_DIR, entry.file).split(path.sep).join('/'), entry.type);
       }
       if (rel.startsWith('katex/fonts/')) {
         const fname = rel.slice('katex/fonts/'.length);
@@ -825,7 +934,7 @@ function createServer(root, {
         if (fname.includes('/') || !FONT_MIME[ext]) return sendJSON(res, 403, { error: 'forbidden' });
         const full = safeResolve(KATEX_FONTS_DIR, fname);
         if (!full) return sendJSON(res, 403, { error: 'forbidden' });
-        return await sendFileOr404(res, full, FONT_MIME[ext]);
+        return sendBuildAssetOr404(res, path.relative(CLIENT_DIR, full).split(path.sep).join('/'), FONT_MIME[ext]);
       }
       return sendError(res, { code: 'not_found' });
     } },
@@ -834,24 +943,24 @@ function createServer(root, {
       const { res, pathname } = ctx;
       const rel = pathname.slice('/assets/'.length);
       if (rel === 'markdown-it.min.js') {
-        return await sendFile(res, MARKDOWN_IT_UMD, 'text/javascript; charset=utf-8');
+        return sendBuildAssetOr404(res, path.relative(CLIENT_DIR, MARKDOWN_IT_UMD).split(path.sep).join('/'), 'text/javascript; charset=utf-8');
       }
       const full = safeResolve(CLIENT_DIR, rel);
       const ext = path.extname(rel);
       const type = MIME[ext] || ASSET_MIME[ext];
       if (!full || !type) return sendError(res, { code: 'not_found' });
-      // an upgrade changes these files in place at the same URLs; a cached copy
-      // from the previous version reads payload keys that no longer exist
-      return await sendFileOr404(res, full, type, { 'Cache-Control': 'no-cache' });
+      // A replacement process serves new bytes at the same URLs; force tabs to
+      // revalidate after handoff instead of keeping the prior build cached.
+      return sendBuildAssetOr404(res, rel, type, { 'Cache-Control': 'no-cache' });
     } },
 
     { method: 'GET', match: (pathname) => pathname === '/favicon.ico', handler: async (ctx) => {
-      return await sendFileOr404(ctx.res, path.join(CLIENT_DIR, 'favicon-32.png'), 'image/png');
+      return sendBuildAssetOr404(ctx.res, 'favicon-32.png', 'image/png');
     } },
 
     { method: 'GET', match: () => true, handler: async (ctx) => {
       const { res, url } = ctx;
-      const template = await fsp.readFile(SHELL_PATH, 'utf8');
+      const template = CLIENT_BUILD.get(path.relative(CLIENT_DIR, SHELL_PATH).split(path.sep).join('/')).toString('utf8');
       // Inline boot data to avoid theme flashes and late Recents layout.
       const boot = {};
       boot.recents = await listRecents();
@@ -873,7 +982,7 @@ function createServer(root, {
         }
       }
       boot.settings = await getSettingsView({
-        platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath,
+        platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath, updateToken,
       });
       const html = renderShell(template, boot, { launcherBoot: boot.roots.length === 0 });
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });

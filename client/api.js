@@ -97,6 +97,18 @@ export function installApp() {
   return fetch('/api/install-app', { method: 'POST' });
 }
 
+export function startUpdate(token) {
+  return fetch('/api/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+}
+
+export function getUpdateState() {
+  return fetch('/api/update', { cache: 'no-store' });
+}
+
 export function registerMarkdown() {
   return fetch('/api/register-markdown', { method: 'POST' });
 }

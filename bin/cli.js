@@ -9,7 +9,7 @@ const { classifyRootTarget } = require('../server/documents.js');
 const { identifyRoot } = require('../server/root-identity.js');
 const { formatRouteContext } = require('../server/route-context.js');
 const { discoverRegistry } = require('../server/registry.js');
-const { CAPABILITIES, DEFAULT_MODE } = require('../server/protocol.js');
+const { CAPABILITIES, DEFAULT_MODE, getInstanceMetadata } = require('../server/protocol.js');
 const VERSION = require('../package.json').version;
 
 function parseArgs(argv, defaultPort = 4321) {
@@ -97,10 +97,40 @@ function postAddRoot(port, targetPath) {
   });
 }
 
+function requestRuntimeHandoff(port) {
+  return new Promise((resolve) => {
+    const metadata = getInstanceMetadata();
+    const payload = JSON.stringify({
+      instanceId: metadata.instanceId,
+      pid: process.pid,
+      startedAt: metadata.startedAt,
+    });
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/api/runtime-handoff', method: 'POST', timeout: 2000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const body = JSON.parse(data);
+          resolve(res.statusCode === 200 && typeof body.handoffPath === 'string' ? body : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(null));
+    req.end(payload);
+  });
+}
+
 // Hand the target to a shared server; a conflict requires a dedicated boot.
 async function attemptReuse(target, configuredPort, args, browser) {
   const found = await discoverPrimary(configuredPort);
   if (!found) return { handled: false, conflict: false };
+  if (found.version !== VERSION) return { handled: false, conflict: false, replacement: found };
   const added = await postAddRoot(found.actualPort, target);
   if (!added) return { handled: false, conflict: false };
   if (added.status === 409) return { handled: false, conflict: true };
@@ -353,7 +383,7 @@ if (process.argv[2] === 'skills') {
       : mode === 'all' ? 'skills/?scope=all' : 'skills/';
 
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-    const server = createServer(null, { skillsContexts: contexts });
+    const server = createServer(null, { skillsContexts: contexts, selfHealOnBoot: true });
     serve(server, args, urlPath, () => `showmd serving ${roots.length} skill root(s): ${roots.map((r) => r.key).join(', ')}`, stored.browser);
   })();
   return;
@@ -364,7 +394,7 @@ if (process.argv[2] === 'agents') {
     const stored = await require('../server/settings.js').readSettings();
     const { args } = parseArgs(process.argv.slice(3), stored.port);
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-    const server = createServer(null, { warmPickerOnStart: true });
+    const server = createServer(null, { warmPickerOnStart: true, selfHealOnBoot: true });
     serve(server, args, 'agents/claude/', () => 'showmd serving agent config', stored.browser);
   })();
   return;
@@ -377,14 +407,21 @@ if (process.argv[2] === 'agents') {
   if (args.launcher) {
     // App launches reuse the first compatible registry entry.
     const found = args.portExplicit ? null : await discoverPrimary(args.port);
-    if (found && found.capabilities.includes(CAPABILITIES.ROOTS_V1)) {
+    if (found && found.version === VERSION && found.capabilities.includes(CAPABILITIES.ROOTS_V1)) {
       const url = `http://127.0.0.1:${found.actualPort}/`;
       console.log(url);
       if (args.open) openBrowser(url, stored.browser);
       return;
     }
+    if (found && found.version !== VERSION) {
+      const handoff = await requestRuntimeHandoff(found.actualPort);
+      if (handoff) {
+        process.env.SHOWMD_RESTART_HANDOFF = handoff.handoffPath;
+        args.port = handoff.port;
+      }
+    }
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
-    serve(createServer(null, { warmPickerOnStart: true }), args, '', () => 'showmd launcher', stored.browser);
+    serve(createServer(null, { warmPickerOnStart: true, selfHealOnBoot: true }), args, '', () => 'showmd launcher', stored.browser);
     return;
   }
 
@@ -401,9 +438,18 @@ if (process.argv[2] === 'agents') {
 
   // Shared CLI invocations reuse a compatible server when possible.
   let wantsDedicated = args.portExplicit || args.dedicated;
+  let replacementPort = null;
   if (!wantsDedicated) {
     const reused = await attemptReuse(target, args.port, args, stored.browser);
     if (reused.handled) return;
+    if (reused.replacement) {
+      const handoff = await requestRuntimeHandoff(reused.replacement.actualPort);
+      if (handoff) {
+        process.env.SHOWMD_RESTART_HANDOFF = handoff.handoffPath;
+        args.port = handoff.port;
+        replacementPort = handoff.port;
+      }
+    }
     // Ancestor overlap cannot share a registry slot, so boot dedicated.
     if (reused.conflict) wantsDedicated = true;
   }
@@ -415,9 +461,9 @@ if (process.argv[2] === 'agents') {
 
   require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
   const mode = wantsDedicated ? 'dedicated' : DEFAULT_MODE;
-  const server = createServer(root, { warmPickerOnStart: true, initialDoc: doc, mode });
+  const server = createServer(root, { warmPickerOnStart: true, selfHealOnBoot: true, initialDoc: doc, mode });
   serve(server, args, urlPath, () => `showmd serving ${root}`, stored.browser, {
-    reuseTarget: wantsDedicated ? null : target,
+    reuseTarget: wantsDedicated || replacementPort ? null : target,
     configuredPort: args.port,
   });
 })();

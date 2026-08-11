@@ -719,6 +719,7 @@ const settingsView = createSettingsView({
     return root ? `← ${root.name}` : '← Home';
   },
   onBack: () => leaveSettings(),
+  isSettingsOpen: () => isSettingsOpen(viewState.view),
 });
 
 async function enterSettingsView() {

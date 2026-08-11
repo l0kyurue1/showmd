@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,11 +29,26 @@ function spawnCli(extraArgs) {
 }
 
 function spawnCliArgs(argv, opts = {}) {
-  const child = spawn('node', [path.join(PROJECT, 'bin', 'cli.js'), ...argv], { stdio: ['ignore', 'pipe', 'pipe'], env: childEnv, ...opts });
+  return spawnCliFrom(PROJECT, argv, { env: childEnv, ...opts });
+}
+
+function spawnCliFrom(packageDir, argv, opts = {}) {
+  const child = spawn('node', [path.join(packageDir, 'bin', 'cli.js'), ...argv], { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
   const state = { stdout: '', stderr: '' };
   child.stdout.on('data', (d) => (state.stdout += d.toString()));
   child.stderr.on('data', (d) => (state.stderr += d.toString()));
   return { child, state };
+}
+
+function copyPackageWithVersion(version) {
+  const packageDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-old-package-')));
+  for (const dir of ['bin', 'client', 'server']) {
+    cpSync(path.join(PROJECT, dir), path.join(packageDir, dir), { recursive: true });
+  }
+  const pkg = JSON.parse(readFileSync(path.join(PROJECT, 'package.json'), 'utf8'));
+  writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ ...pkg, version }));
+  symlinkSync(path.join(PROJECT, 'node_modules'), path.join(packageDir, 'node_modules'), 'dir');
+  return packageDir;
 }
 
 function extractUrl(stdout) {
@@ -51,6 +66,16 @@ async function waitFor(predicate, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const result = predicate();
+    if (result) return result;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('condition not met in time');
+}
+
+async function waitForAsync(predicate, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = await predicate();
     if (result) return result;
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -122,6 +147,86 @@ test('two sequential invocations reuse one process: second reuses the first, bot
     await Promise.all([a, b].filter(Boolean).map((p) => killAndWait(p.child)));
     rmSync(home, { recursive: true, force: true });
     rmSync(secondDir, { recursive: true, force: true });
+  }
+});
+
+test('a target invocation replaces a mismatched shared runtime and preserves both roots', async () => {
+  const oldVersion = '0.0.0-old-runtime';
+  const currentVersion = JSON.parse(readFileSync(path.join(PROJECT, 'package.json'), 'utf8')).version;
+  const oldPackage = copyPackageWithVersion(oldVersion);
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-version-replace-home-')));
+  const secondDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-version-replace-target-')));
+  let old = null;
+  let fresh = null;
+  try {
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+    const secondFile = path.join(secondDir, 'second.md');
+    writeFileSync(secondFile, '# second\n');
+
+    old = spawnCliFrom(oldPackage, [filePath, '--no-open'], { env });
+    await waitFor(() => extractUrl(old.state.stdout));
+    assert.equal((await (await fetch(`http://127.0.0.1:${pinnedPort}/api/version`)).json()).version, oldVersion);
+
+    fresh = spawnCliArgs([secondFile, '--no-open'], { env });
+    const version = await waitForAsync(async () => {
+      try {
+        const body = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/version`)).json();
+        return body.version === currentVersion ? body : null;
+      } catch {
+        return null;
+      }
+    });
+    assert.equal(version.version, currentVersion, 'the discovered runtime must exactly match the invoking package');
+    await waitFor(() => old.child.exitCode !== null || old.child.signalCode !== null);
+
+    const info = await waitFor(() => extractUrl(fresh.state.stdout));
+    assert.equal(info.port, pinnedPort, 'replacement keeps the shared port');
+    const roots = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/roots`)).json();
+    assert.equal(roots.roots.length, 2, 'replacement preserves the old root and adds the requested root');
+  } finally {
+    await Promise.all([old, fresh].filter(Boolean).map((p) => killAndWait(p.child)));
+    rmSync(oldPackage, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(secondDir, { recursive: true, force: true });
+  }
+});
+
+test('launcher discovery replaces a mismatched shared runtime without losing its roots', async () => {
+  const oldVersion = '0.0.0-old-launcher';
+  const currentVersion = JSON.parse(readFileSync(path.join(PROJECT, 'package.json'), 'utf8')).version;
+  const oldPackage = copyPackageWithVersion(oldVersion);
+  const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-launcher-replace-home-')));
+  let old = null;
+  let fresh = null;
+  try {
+    const pinnedPort = await getFreePort();
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
+    const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
+
+    old = spawnCliFrom(oldPackage, [filePath, '--no-open'], { env });
+    const oldInfo = await waitFor(() => extractUrl(old.state.stdout));
+
+    fresh = spawnCliArgs(['--launcher', '--no-open'], { env });
+    const version = await waitForAsync(async () => {
+      try {
+        const body = await (await fetch(`http://127.0.0.1:${pinnedPort}/api/version`)).json();
+        return body.version === currentVersion ? body : null;
+      } catch {
+        return null;
+      }
+    });
+    assert.equal(version.version, currentVersion, 'launcher must run the exact invoking package');
+    await waitFor(() => old.child.exitCode !== null || old.child.signalCode !== null);
+
+    const launcherInfo = await waitFor(() => extractUrl(fresh.state.stdout));
+    assert.equal(launcherInfo.port, pinnedPort, 'replacement keeps the shared port');
+    assert.equal((await fetch(oldInfo.url)).status, 200, 'the replacement preserves the already-open root');
+  } finally {
+    await Promise.all([old, fresh].filter(Boolean).map((p) => killAndWait(p.child)));
+    rmSync(oldPackage, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

@@ -162,6 +162,7 @@ const REFRESH_SVG ='<svg viewBox="0 0 24 24" width="11" height="11" fill="none" 
 const COPY_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 8m0 2a2 2 0 0 1 2 -2h9a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2z"/><path d="M16 8v-2a2 2 0 0 0 -2 -2h-9a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h2"/></svg>';
 
 const UPDATE_CTA_DISMISS_KEY = 'showmd-update-cta-dismissed-version';
+const UPDATE_SUCCESS_KEY = 'showmd-update-success';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -204,8 +205,13 @@ export function createSettingsView({
   chevronSvg, positionTip,
   setTheme, applyFontPreset, applyFontSize,
   getRootKey, onSelectRoot, backLabel, onBack,
+  isSettingsOpen = () => false,
 }) {
   let justUpdatedVersion = null;
+  let updateOperation = null;
+  let updateToken = null;
+  let checkedSuccessMarker = false;
+  let successTimer = null;
   let restarting = false;
   // Track the open custom select so rebuilds can close its document listeners.
   let closeOpenMenu = null;
@@ -306,10 +312,66 @@ export function createSettingsView({
     if (result.samePort) await open();
   }
 
+  async function pollUpdate(values) {
+    for (let attempt = 0; attempt < 240; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      let state;
+      try {
+        const res = await api.getUpdateState();
+        if (!res.ok) continue;
+        state = await res.json();
+      } catch {
+        continue;
+      }
+      updateOperation = state;
+      renderCta(values);
+      if (state.state === 'failure') return;
+      if (state.state === 'updated') {
+        justUpdatedVersion = state.version;
+        renderCta({ ...values, showmdVersion: state.version, updateAvailable: false });
+        return;
+      }
+    }
+    updateOperation = { state: 'failure' };
+    renderCta(values);
+  }
+
+  async function runShowmdUpdate(values) {
+    const targetVersion = values.latestVersion;
+    if (!targetVersion || !updateToken) return;
+    localStorage.setItem(UPDATE_SUCCESS_KEY, JSON.stringify({ version: targetVersion, at: Date.now() }));
+    updateOperation = { state: 'updating', targetVersion };
+    renderCta(values);
+    try {
+      const res = await api.startUpdate(updateToken);
+      const body = await res.json().catch(() => ({}));
+      if (body.token) updateToken = body.token;
+      if (!res.ok) throw new Error();
+      updateOperation = body;
+      renderCta(values);
+      await pollUpdate(values);
+    } catch {
+      updateOperation = { state: 'failure' };
+      renderCta(values);
+    }
+  }
+
   function renderCta(values) {
+    if (values.updateToken) updateToken = values.updateToken;
+    if (!checkedSuccessMarker) {
+      checkedSuccessMarker = true;
+      try {
+        const marker = JSON.parse(localStorage.getItem(UPDATE_SUCCESS_KEY) || 'null');
+        if (marker && marker.version === values.showmdVersion && Date.now() - marker.at < 30_000) {
+          justUpdatedVersion = marker.version;
+        }
+      } catch {}
+    }
     const vm = buildUpdateCta(values, {
       dismissedVersion: localStorage.getItem(UPDATE_CTA_DISMISS_KEY),
       justUpdatedVersion,
+      operation: updateOperation,
+      allowDismiss: !isSettingsOpen(),
     });
     if (!vm) { ctaEl.hidden = true; ctaEl.replaceChildren(); return; }
     ctaEl.hidden = false;
@@ -325,6 +387,10 @@ export function createSettingsView({
     ctaEl.querySelector('.update-cta-btn')?.addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
+      if (vm.action === 'update') {
+        await runShowmdUpdate(values);
+        return;
+      }
       try {
         const res = await api.installApp();
         if (!res.ok) throw new Error();
@@ -332,15 +398,22 @@ export function createSettingsView({
         // refreshDerived, not renderCta: the install also changes the settings
         // rows, and they are patched from the same fetched values
         await refreshDerived();
-        setTimeout(() => {
-          justUpdatedVersion = null;
-          ctaEl.classList.add('update-cta-collapsing');
-          setTimeout(() => refreshDerived(), 300);
-        }, 3000);
       } catch {
         btn.disabled = false;
       }
     });
+    if (vm.state === 'updated' && !successTimer) {
+      successTimer = setTimeout(() => {
+        justUpdatedVersion = null;
+        updateOperation = null;
+        ctaEl.classList.add('update-cta-collapsing');
+        setTimeout(() => {
+          ctaEl.hidden = true;
+          ctaEl.replaceChildren();
+          successTimer = null;
+        }, 300);
+      }, 3000);
+    }
   }
 
   // Route theme and font changes through their app-wide live effects.

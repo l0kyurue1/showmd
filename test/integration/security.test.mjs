@@ -81,7 +81,9 @@ test('cross-origin requests are rejected across privileged write routes without 
     const requests = [
       ['POST /api/prune', '/api/prune', 'POST'],
       ['POST /api/install-app', '/api/install-app', 'POST'],
+      ['POST /api/update', '/api/update', 'POST'],
       ['POST /api/restart', '/api/restart', 'POST'],
+      ['POST /api/runtime-handoff', '/api/runtime-handoff', 'POST'],
       ['POST /api/shutdown', '/api/shutdown', 'POST'],
       ['DELETE /api/roots/:key', `/api/roots/${key}`, 'DELETE'],
     ];
