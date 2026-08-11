@@ -31,7 +31,7 @@ function rootInfo(roots) {
 // store-lookup boilerplate. Returns { ok:false, error: <ERROR_STATUS code> }
 // on the first unmet need, leaving status/message mapping to the caller's
 // sendError (route-request.js has no opinion on HTTP status codes).
-async function resolveContext(route, base, { pickStore }) {
+async function resolveContext(route, base) {
   const ctx = { ...base };
   const needs = route.needs || [];
   // both 'body' and 'rawBody' read the same request stream, which yields
@@ -45,10 +45,6 @@ async function resolveContext(route, base, { pickStore }) {
       if (!parsed.ok) return { ok: false, error: 'invalid_json' };
       ctx.body = parsed.body;
     }
-  }
-  if (needs.includes('store')) {
-    ctx.store = await pickStore(base.id);
-    if (!ctx.store) return { ok: false, error: 'no_root' };
   }
   return { ok: true, ctx };
 }

@@ -40,38 +40,24 @@ test('rootInfo: rooted server reports dir + basename', () => {
   assert.deepEqual(info, { dir: '/tmp/some-project', name: 'some-project', launchedFrom: 'terminal' });
 });
 
-test('resolveContext: needs store, missing store fails with no_root', async () => {
-  const route = { needs: ['store'] };
-  const result = await resolveContext(route, { id: 'a.md' }, { pickStore: async () => null });
-  assert.deepEqual(result, { ok: false, error: 'no_root' });
-});
-
-test('resolveContext: needs store, resolved store attaches to context', async () => {
-  const store = { read: () => {} };
-  const route = { needs: ['store'] };
-  const result = await resolveContext(route, { id: 'a.md' }, { pickStore: async () => store });
-  assert.equal(result.ok, true);
-  assert.equal(result.ctx.store, store);
-});
-
 test('resolveContext: needs body, malformed JSON fails with invalid_json', async () => {
   const route = { needs: ['body'] };
   const base = { req: reqWith([Buffer.from('{bad')]) };
-  const result = await resolveContext(route, base, { pickStore: async () => null });
+  const result = await resolveContext(route, base);
   assert.deepEqual(result, { ok: false, error: 'invalid_json' });
 });
 
 test('resolveContext: no needs passes the base context through unchanged', async () => {
   const route = {};
   const base = { pathname: '/api/version' };
-  const result = await resolveContext(route, base, { pickStore: async () => null });
+  const result = await resolveContext(route, base);
   assert.deepEqual(result, { ok: true, ctx: { pathname: '/api/version' } });
 });
 
 test('resolveContext: needs both body and rawBody, both resolve from a single read of req', async () => {
   const route = { needs: ['body', 'rawBody'] };
   const base = { req: reqWith([Buffer.from('{"a":1}')]) };
-  const result = await resolveContext(route, base, { pickStore: async () => null });
+  const result = await resolveContext(route, base);
   assert.equal(result.ok, true);
   assert.deepEqual(result.ctx.body, { a: 1 });
   assert.equal(result.ctx.rawBody.toString('utf8'), '{"a":1}');

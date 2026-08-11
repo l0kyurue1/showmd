@@ -8,9 +8,14 @@ function capture(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { ...opts, windowsHide: true });
 }
 
+// execFile's callback form has no `input` option of its own (that's only on
+// the sync variants) — feeding stdin means writing to the returned child's
+// stream ourselves before the callback fires
 function tryRun(cmd, args, opts = {}) {
+  const { input, ...rest } = opts;
   return new Promise((resolve) => {
-    execFile(cmd, args, { ...opts, windowsHide: true }, (err, stdout) => resolve({ err, stdout }));
+    const child = execFile(cmd, args, { ...rest, windowsHide: true }, (err, stdout) => resolve({ err, stdout }));
+    if (input != null) child.stdin?.end(input);
   });
 }
 
