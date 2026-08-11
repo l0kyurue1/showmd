@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+const require = createRequire(import.meta.url);
+const fsp = require('node:fs/promises');
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-settings-'));
 process.env.SHOWMD_SETTINGS_HOME = path.join(workDir, 'state');
@@ -68,6 +72,38 @@ test('writeJSONAtomic writes the file and leaves no tmp file behind', async () =
   const { readFileSync, readdirSync } = await import('node:fs');
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { a: 1 });
   assert.deepEqual(readdirSync(path.dirname(file)), ['data.json']);
+});
+
+test('writeJSONAtomic removes its temporary file after a write or rename failure, while preserving that error', async () => {
+  for (const operation of ['writeFile', 'rename']) {
+    const file = path.join(workDir, `atomic-${operation}-failure`, 'data.json');
+    const original = fsp[operation];
+    const error = new Error(`${operation} failed`);
+    fsp[operation] = operation === 'writeFile'
+      ? async (...args) => { await original(...args); throw error; }
+      : async () => { throw error; };
+    try {
+      await assert.rejects(writeJSONAtomic(file, { a: 1 }), (actual) => actual === error);
+    } finally {
+      fsp[operation] = original;
+    }
+    const { readdirSync } = await import('node:fs');
+    assert.deepEqual(readdirSync(path.dirname(file)), [], operation);
+  }
+});
+
+test('concurrent writeJSONAtomic calls use distinct temporary paths within one millisecond', async () => {
+  const file = path.join(workDir, 'atomic-collision', 'data.json');
+  const now = Date.now;
+  Date.now = () => 1234;
+  try {
+    await Promise.all([
+      writeJSONAtomic(file, { a: 1 }),
+      writeJSONAtomic(file, { a: 2 }),
+    ]);
+  } finally {
+    Date.now = now;
+  }
 });
 
 test('browser rejects names that could break out of a spawned shell command', async () => {

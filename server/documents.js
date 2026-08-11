@@ -2,7 +2,6 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const os = require('node:os');
 const { createHash } = require('node:crypto');
 const history = require('./history.js');
 
@@ -55,6 +54,7 @@ const digest = (buffer) => createHash('sha1').update(buffer).digest('hex');
 
 const FORBIDDEN = { ok: false, code: 'forbidden' };
 const NOT_FOUND = { ok: false, code: 'not_found' };
+const CLOSED = { ok: false, code: 'closed' };
 
 const MAX_WALK_DEPTH = 40;
 
@@ -117,11 +117,16 @@ async function walkFiles(dir, root, out, opts = {}, depth = 0) {
 
 const walkMd = (dir, root, out) => walkFiles(dir, root, out, { filter: isMarkdownFile });
 
-// Every operation takes a document id — `relPath`, or `key/relPath` in
-// multi-root mode. Resolving one refuses to leave its root; callers never see
-// a filesystem path.
-function createDocumentStore(initialRoots, multi, historyImpl = history) {
-  let roots = initialRoots;
+// Every operation takes a document id. Addressing determines whether that id
+// is `relPath` or `key/relPath`. Resolution never leaves a construction-time
+// root snapshot, and callers never see a filesystem path.
+/**
+ * @param {import('../types/showmd').DocumentRoot[]} initialRoots
+ * @param {import('../types/showmd').DocumentStoreConfig} config
+ */
+function createDocumentStore(initialRoots, { addressing }, historyImpl = history) {
+  const roots = initialRoots.map((root) => ({ ...root }));
+  const keyed = addressing === 'keyed';
   // one hash per document is not enough: back-to-back saves each stamp their
   // own, and a watcher event for the earlier one can arrive after the later one
   // stamped, which would read our own content as somebody else's
@@ -147,6 +152,29 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
     return run;
   }
 
+  // Runtime shutdown closes admission before stopping its watcher, then waits
+  // here without reaching into the per-document lock implementation. Tracking
+  // the public operation (rather than only its lock tail) also covers restore's
+  // history lookup before it reaches writeAt().
+  let acceptingWrites = true;
+  const acceptedWrites = new Set();
+  function admitWrite(fn) {
+    if (!acceptingWrites) return Promise.resolve(CLOSED);
+    const run = Promise.resolve().then(fn);
+    const settled = run.catch(() => {});
+    acceptedWrites.add(settled);
+    settled.then(() => acceptedWrites.delete(settled));
+    return run;
+  }
+
+  function beginClose() {
+    acceptingWrites = false;
+  }
+
+  async function drain() {
+    while (acceptedWrites.size) await Promise.all(acceptedWrites);
+  }
+
   /**
    * @param {string} id
    * @param {import('../types/showmd').LocateOptions} [opts]
@@ -154,7 +182,8 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
   function locate(id, { anyExt } = {}) {
     if (!anyExt && !isMarkdownFile(id)) return null;
     let dir, rel;
-    if (!multi) {
+    if (!keyed) {
+      if (!roots.length) return null;
       dir = roots[0].dir;
       rel = id;
     } else {
@@ -217,40 +246,31 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
   return {
     walkMd,
 
-    // the whole tree decision: which view, rooted or not, one root or many.
-    // Outcomes are `{ ok, code }` like every other store operation, so the route
-    // only picks a status for them.
-    /**
-     * @param {string} view
-     * @param {import('../types/showmd').StoreTreeOptions} [opts]
-     */
-    async tree(view, { agent = 'claude', skillsMode, home = os.homedir(), cwd = process.cwd() } = {}) {
-      // required here, not at module scope: skills.js and agent-config.js both
-      // require this module, and a top-level cycle would hand them an empty one
-      const skills = require('./skills.js');
-      const agentConfig = require('./agent-config.js');
+    /** @param {{ scope?: string }} [opts] */
+    async tree({ scope } = {}) {
       const rootDir = roots.length ? roots[0].dir : null;
-
-      if (view === 'agents') {
-        const { tree } = await agentConfig.getAgentTree(agent, { cwd: rootDir || cwd });
-        return tree ? { ok: true, tree } : { ok: false, code: 'unknown_agent' };
-      }
-      if (multi) {
-        return { ok: true, tree: await skills.buildSkillsTree(roots, { walkMd, home, cwd, mode: skillsMode }) };
-      }
-      if (view === 'skills') {
-        if (!rootDir) {
-          const skillRoots = skills.discoverSkillRoots({ mode: 'global' });
-          return { ok: true, tree: await skills.buildSkillsTree(skillRoots, { walkMd, home, cwd }) };
-        }
-        return { ok: true, tree: (await skills.getTree(rootDir)).tree };
-      }
       if (!rootDir) return { ok: false, code: 'no_root' };
-      try {
-        return { ok: true, tree: await walkFiles(rootDir, rootDir, [], { filter: isMarkdownFile, strictRoot: true }) };
-      } catch (err) {
-        return { ok: false, code: 'unreadable_root', dir: rootDir, errno: err.code };
+      if (scope) {
+        const full = safeResolve(rootDir, scope);
+        if (!full) return FORBIDDEN;
+        const st = await fsp.stat(full).catch(() => null);
+        if (!st || !st.isDirectory()) return NOT_FOUND;
+        try {
+          return { ok: true, tree: await walkFiles(full, rootDir, [], { filter: isMarkdownFile, strictRoot: true }) };
+        } catch (err) {
+          return { ok: false, code: 'unreadable_root', dir: full, errno: err.code };
+        }
       }
+      const files = [];
+      for (const root of roots) {
+        try {
+          const rootFiles = await walkFiles(root.dir, root.dir, [], { filter: isMarkdownFile, strictRoot: true });
+          files.push(...rootFiles.map((rel) => keyed ? `${root.key}/${rel}` : rel));
+        } catch (err) {
+          return { ok: false, code: 'unreadable_root', dir: root.dir, errno: err.code };
+        }
+      }
+      return { ok: true, tree: files };
     },
 
     ignorePath(dir, filePath) {
@@ -261,7 +281,7 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
 
     idFor(root, filePath) {
       const rel = relPosix(root.dir, filePath);
-      return multi ? `${root.key}/${rel}` : rel;
+      return keyed ? `${root.key}/${rel}` : rel;
     },
 
     async read(id) {
@@ -285,35 +305,6 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
       return fsp.access(loc.full).then(() => true, () => false);
     },
 
-    // resolution counterpart to tree(): raw/asset/history/diff/restore routes
-    // go through this to find which store actually owns an id, trying the
-    // main store first, then a skills/agent-config store built lazily, same
-    // as tree() builds them for those views
-    async storeFor(id, { cwd = process.cwd() } = {}) {
-      const skills = require('./skills.js');
-      const agentConfig = require('./agent-config.js');
-      async function agentStoreFor() {
-        const agentKey = agentConfig.agentKeyForId(id);
-        if (!agentKey) return null;
-        const { store } = await agentConfig.getAgentTree(agentKey, { cwd });
-        return store;
-      }
-      if (multi) return this;
-      if (!roots.length) {
-        const skillsStore = createDocumentStore(skills.discoverSkillRoots({ mode: 'global' }), true);
-        if (await skillsStore.assetExists(id)) return skillsStore;
-        const agentStore = await agentStoreFor();
-        if (agentStore && (await agentStore.assetExists(id))) return agentStore;
-        return null;
-      }
-      if (await this.assetExists(id)) return this;
-      const { store: skillsStore } = await skills.getTree(roots[0].dir);
-      if (skillsStore && (await skillsStore.assetExists(id))) return skillsStore;
-      const agentStore = await agentStoreFor();
-      if (agentStore && (await agentStore.assetExists(id))) return agentStore;
-      return this;
-    },
-
     // reverse of locate(): a real fs path -> its doc id, if a served root contains it.
     // root.dir itself may sit behind a symlink (e.g. macOS /var -> /private/var), so
     // it's realpath'd too before the containment check.
@@ -323,7 +314,7 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
         const realRoot = await fsp.realpath(root.dir).catch(() => root.dir);
         const rel = relPosix(realRoot, full);
         if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
-        return multi ? `${root.key}/${rel}` : rel;
+        return keyed ? `${root.key}/${rel}` : rel;
       }
       return null;
     },
@@ -337,10 +328,12 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
       return { isSymlink: true, target, real, docId };
     },
 
-    async write(id, buffer) {
-      const loc = locate(id);
-      if (!loc) return FORBIDDEN;
-      return writeAt(id, loc, buffer, history.SOURCES.user);
+    write(id, buffer) {
+      return admitWrite(() => {
+        const loc = locate(id);
+        if (!loc) return FORBIDDEN;
+        return writeAt(id, loc, buffer, history.SOURCES.user);
+      });
     },
 
     async reveal(id) {
@@ -367,11 +360,13 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
     },
 
     restore(id, rev, fromRepo) {
-      if (!isValidRev(rev)) return Promise.resolve({ ok: false, code: 'invalid_rev' });
-      return withHistory(id, async (loc) => {
-        const content = await historyImpl.contentAt(loc.dir, loc.rel, rev, fromRepo);
-        if (content == null) return NOT_FOUND;
-        return writeAt(id, loc, Buffer.from(content, 'utf8'), history.SOURCES.restore);
+      return admitWrite(() => {
+        if (!isValidRev(rev)) return { ok: false, code: 'invalid_rev' };
+        return withHistory(id, async (loc) => {
+          const content = await historyImpl.contentAt(loc.dir, loc.rel, rev, fromRepo);
+          if (content == null) return NOT_FOUND;
+          return writeAt(id, loc, Buffer.from(content, 'utf8'), history.SOURCES.restore);
+        });
       });
     },
 
@@ -381,17 +376,18 @@ function createDocumentStore(initialRoots, multi, historyImpl = history) {
     // write takes: otherwise a save landing in between is committed here as
     // somebody else's edit, and the save's own commit then finds nothing staged
     recordIfExternal(id) {
-      const loc = locate(id);
-      if (!loc) return Promise.resolve();
-      return withWriteLock(id, async () => {
-        if (await isSelfWrite(id)) return;
-        await commitQuietly(loc, history.SOURCES.external);
+      return admitWrite(() => {
+        const loc = locate(id);
+        if (!loc) return;
+        return withWriteLock(id, async () => {
+          if (await isSelfWrite(id)) return;
+          await commitQuietly(loc, history.SOURCES.external);
+        });
       });
     },
 
-    setRoots(newRoots) {
-      roots = newRoots;
-    },
+    beginClose,
+    drain,
   };
 }
 

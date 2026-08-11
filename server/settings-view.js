@@ -2,23 +2,21 @@
 const settings = require('./settings.js');
 const settingsPlatform = require('./settings-platform.js');
 const updateCheck = require('./update-check.js');
-const history = require('./history.js');
 const installers = require('./install-app.js');
 
 // appStatusFn/mdHandlerDefaultFn/effectiveSettingsPromise are the same
 // test/platform seams createServer already accepted for this route.
-async function getSettingsView({ platform, multi, rootDir, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath }) {
+async function getSettingsView({ platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath }) {
   const detectMdHandlerDefault = mdHandlerDefaultFn
     || (() => settingsPlatform.detectMdHandlerDefault({ platform, bundleId: installers.BUNDLE_ID }));
-  const [values, browsers, effective, historyTotalBytes, mdHandlerDefault] = await Promise.all([
-    settings.readSettings(), settingsPlatform.detectBrowsers(), effectiveSettingsPromise, history.dirSize(history.pruneAllDir()),
+  const [values, browsers, effective, mdHandlerDefault] = await Promise.all([
+    settings.readSettings(), settingsPlatform.detectBrowsers(), effectiveSettingsPromise,
     detectMdHandlerDefault(),
   ]);
   const update = values.updateCheck ? updateCheck.updateInfo() : { updateAvailable: false, latestVersion: null, checkFailed: false };
-  const historySizeBytes = multi || !rootDir ? null : await history.historySize(rootDir);
   const app = (appStatusFn || installers.appStatus)(platform);
   return {
-    ...values, browsers, ...update, historySizeBytes, historyTotalBytes,
+    ...values, browsers, ...update,
     defaults: settings.DEFAULTS,
     settingsPath: settings.settingsFile(),
     effective: { port: effective.port, browser: effective.browser },

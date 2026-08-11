@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -27,18 +27,19 @@ async function withServer(root, fn) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await fn(base, revealed);
+    const key = root === null ? null : (await (await fetch(`${base}/api/roots`)).json()).roots[0].key;
+    await fn(base, revealed, key);
   } finally {
     server.close();
   }
 }
 
-test('POST /api/reveal: valid path -> 204, injected spawner called with the resolved file, nothing actually spawned', async () => {
+test('POST /api/roots/:key/reveal: valid path -> 204, injected spawner called with the resolved file, nothing actually spawned', async () => {
   const root = tmp('showmd-reveal-');
   try {
     writeFileSync(path.join(root, 'hello.md'), '# hi\n');
-    await withServer(root, async (base, revealed) => {
-      const res = await fetch(`${base}/api/reveal?path=${encodeURIComponent('hello.md')}`, { method: 'POST' });
+    await withServer(root, async (base, revealed, key) => {
+      const res = await fetch(`${base}/api/roots/${key}/reveal?path=${encodeURIComponent('hello.md')}`, { method: 'POST' });
       assert.equal(res.status, 204);
       assert.deepEqual(revealed, [path.join(root, 'hello.md')]);
     });
@@ -47,14 +48,14 @@ test('POST /api/reveal: valid path -> 204, injected spawner called with the reso
   }
 });
 
-test('POST /api/reveal: traversal outside root -> 403, spawner never called', async () => {
+test('POST /api/roots/:key/reveal: traversal outside root -> 403, spawner never called', async () => {
   const root = tmp('showmd-reveal-');
   const outside = tmp('showmd-reveal-outside-');
   try {
     writeFileSync(path.join(outside, 'secret.md'), '# secret\n');
-    await withServer(root, async (base, revealed) => {
+    await withServer(root, async (base, revealed, key) => {
       const traversal = `../${path.basename(outside)}/secret.md`;
-      const res = await fetch(`${base}/api/reveal?path=${encodeURIComponent(traversal)}`, { method: 'POST' });
+      const res = await fetch(`${base}/api/roots/${key}/reveal?path=${encodeURIComponent(traversal)}`, { method: 'POST' });
       assert.equal(res.status, 403);
       assert.deepEqual(revealed, []);
     });
@@ -64,11 +65,11 @@ test('POST /api/reveal: traversal outside root -> 403, spawner never called', as
   }
 });
 
-test('POST /api/reveal: missing file -> 404, spawner never called', async () => {
+test('POST /api/roots/:key/reveal: missing file -> 404, spawner never called', async () => {
   const root = tmp('showmd-reveal-');
   try {
-    await withServer(root, async (base, revealed) => {
-      const res = await fetch(`${base}/api/reveal?path=${encodeURIComponent('missing.md')}`, { method: 'POST' });
+    await withServer(root, async (base, revealed, key) => {
+      const res = await fetch(`${base}/api/roots/${key}/reveal?path=${encodeURIComponent('missing.md')}`, { method: 'POST' });
       assert.equal(res.status, 404);
       assert.deepEqual(revealed, []);
     });
@@ -77,12 +78,12 @@ test('POST /api/reveal: missing file -> 404, spawner never called', async () => 
   }
 });
 
-test('GET /api/asset: serves a png from the doc directory with image/png', async () => {
+test('GET /api/roots/:key/asset: serves a png from the doc directory with image/png', async () => {
   const root = tmp('showmd-asset-');
   try {
     writeFileSync(path.join(root, 'img.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    await withServer(root, async (base) => {
-      const res = await fetch(`${base}/api/asset?path=${encodeURIComponent('img.png')}`);
+    await withServer(root, async (base, revealed, key) => {
+      const res = await fetch(`${base}/api/roots/${key}/asset?path=${encodeURIComponent('img.png')}`);
       assert.equal(res.status, 200);
       assert.equal(res.headers.get('content-type'), 'image/png');
       assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
@@ -92,14 +93,14 @@ test('GET /api/asset: serves a png from the doc directory with image/png', async
   }
 });
 
-test('GET /api/asset: traversal outside root -> 403', async () => {
+test('GET /api/roots/:key/asset: traversal outside root -> 403', async () => {
   const root = tmp('showmd-asset-');
   const outside = tmp('showmd-asset-outside-');
   try {
     writeFileSync(path.join(outside, 'secret.png'), Buffer.from([0x89]));
-    await withServer(root, async (base) => {
+    await withServer(root, async (base, revealed, key) => {
       const traversal = `../${path.basename(outside)}/secret.png`;
-      const res = await fetch(`${base}/api/asset?path=${encodeURIComponent(traversal)}`);
+      const res = await fetch(`${base}/api/roots/${key}/asset?path=${encodeURIComponent(traversal)}`);
       assert.equal(res.status, 403);
     });
   } finally {
@@ -108,12 +109,12 @@ test('GET /api/asset: traversal outside root -> 403', async () => {
   }
 });
 
-test('GET /api/asset: non-whitelisted extension -> 404', async () => {
+test('GET /api/roots/:key/asset: non-whitelisted extension -> 404', async () => {
   const root = tmp('showmd-asset-');
   try {
     writeFileSync(path.join(root, 'notes.txt'), 'hi');
-    await withServer(root, async (base) => {
-      const res = await fetch(`${base}/api/asset?path=${encodeURIComponent('notes.txt')}`);
+    await withServer(root, async (base, revealed, key) => {
+      const res = await fetch(`${base}/api/roots/${key}/asset?path=${encodeURIComponent('notes.txt')}`);
       assert.equal(res.status, 404);
     });
   } finally {
@@ -121,7 +122,7 @@ test('GET /api/asset: non-whitelisted extension -> 404', async () => {
   }
 });
 
-test('GET /api/raw: symlinked doc sets X-Showmd-Symlink, plain doc does not', async () => {
+test('GET /api/roots/:key/raw: symlinked doc sets X-Showmd-Symlink, plain doc does not', async () => {
   const root = tmp('showmd-symlink-');
   const outside = tmp('showmd-symlink-outside-');
   try {
@@ -129,16 +130,16 @@ test('GET /api/raw: symlinked doc sets X-Showmd-Symlink, plain doc does not', as
     symlinkSync(path.join(root, 'real.md'), path.join(root, 'link.md'));
     writeFileSync(path.join(outside, 'external.md'), '# ext\n');
     symlinkSync(path.join(outside, 'external.md'), path.join(root, 'outlink.md'));
-    await withServer(root, async (base) => {
-      const plain = await fetch(`${base}/api/raw?path=${encodeURIComponent('real.md')}`);
+    await withServer(root, async (base, revealed, key) => {
+      const plain = await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('real.md')}`);
       assert.equal(plain.headers.get('x-showmd-symlink'), null);
 
-      const linked = await fetch(`${base}/api/raw?path=${encodeURIComponent('link.md')}`);
+      const linked = await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('link.md')}`);
       assert.equal(linked.headers.get('x-showmd-symlink'), '1');
       assert.equal(decodeURIComponent(linked.headers.get('x-showmd-symlink-target')), path.join(root, 'real.md'));
       assert.equal(decodeURIComponent(linked.headers.get('x-showmd-symlink-doc')), 'real.md');
 
-      const outlinked = await fetch(`${base}/api/raw?path=${encodeURIComponent('outlink.md')}`);
+      const outlinked = await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('outlink.md')}`);
       assert.equal(outlinked.headers.get('x-showmd-symlink'), '1');
       assert.equal(outlinked.headers.get('x-showmd-symlink-doc'), null);
     });
@@ -219,20 +220,6 @@ test('GET /api/settings: includes settingsPath, defaults, and effective (snapsho
   }
 });
 
-test('POST /api/reveal: works in multi-root skills mode', async () => {
-  const rootA = tmp('showmd-reveal-rootA-');
-  try {
-    writeFileSync(path.join(rootA, 'skillA.md'), '# a\n');
-    await withServer([{ key: 'agents', dir: rootA, label: 'agents' }], async (base, revealed) => {
-      const res = await fetch(`${base}/api/reveal?path=${encodeURIComponent('agents/skillA.md')}`, { method: 'POST' });
-      assert.equal(res.status, 204);
-      assert.deepEqual(revealed, [path.join(rootA, 'skillA.md')]);
-    });
-  } finally {
-    rmSync(rootA, { recursive: true, force: true });
-  }
-});
-
 test('POST /api/reveal?settings=1: reveals settings.json regardless of ?path', async () => {
   const root = tmp('showmd-reveal-settings-');
   try {
@@ -247,23 +234,30 @@ test('POST /api/reveal?settings=1: reveals settings.json regardless of ?path', a
   }
 });
 
-test('GET /api/settings: historySizeBytes reflects a real save, POST /api/prune clears it back to 0', async () => {
+test('GET /api/history-size: historySizeBytes reflects a real save, POST /api/prune clears it back to 0', async () => {
   const root = tmp('showmd-prune-');
   try {
     writeFileSync(path.join(root, 'a.md'), '# a\n');
-    await withServer(root, async (base) => {
-      const put = await fetch(`${base}/api/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
+    await withServer(root, async (base, revealed, rootKey) => {
+      const put = await fetch(`${base}/api/roots/${rootKey}/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
       assert.equal(put.status, 204);
       assert.ok(existsSync(historyDirFor(root)));
 
-      const before = await (await fetch(`${base}/api/settings`)).json();
+      const before = await (await fetch(`${base}/api/history-size?root=${rootKey}`)).json();
       assert.ok(before.historySizeBytes > 0);
 
-      const pruned = await fetch(`${base}/api/prune`, { method: 'POST' });
+      const pruned = await fetch(`${base}/api/prune`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'root', rootKey }),
+      });
       assert.equal(pruned.status, 200);
-      assert.ok(!existsSync(historyDirFor(root)));
+      // scope=root now rebuilds the shared repo in place rather than deleting
+      // a dedicated directory, so the repo itself survives; only this root's
+      // own history is gone from it
+      assert.ok(existsSync(historyDirFor(root)));
 
-      const after = await (await fetch(`${base}/api/settings`)).json();
+      const after = await (await fetch(`${base}/api/history-size?root=${rootKey}`)).json();
       assert.equal(after.historySizeBytes, 0);
     });
   } finally {
@@ -271,16 +265,42 @@ test('GET /api/settings: historySizeBytes reflects a real save, POST /api/prune 
   }
 });
 
-test('POST /api/prune: 404 in multi-root skills mode (no single served root to scope to)', async () => {
-  const rootA = tmp('showmd-prune-rootA-');
+test('POST /api/prune: scope=root without a rootKey is a 400, and an unopen key is a 404', async () => {
+  const root = tmp('showmd-prune-key-');
   try {
-    writeFileSync(path.join(rootA, 'skillA.md'), '# a\n');
-    await withServer([{ key: 'agents', dir: rootA, label: 'agents' }], async (base) => {
-      const res = await fetch(`${base}/api/prune`, { method: 'POST' });
-      assert.equal(res.status, 404);
+    await withServer(root, async (base) => {
+      const unnamed = await fetch(`${base}/api/prune`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'root' }),
+      });
+      assert.equal(unnamed.status, 400);
+
+      const unopen = await fetch(`${base}/api/prune`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'root', rootKey: 'r_AAAAAAAAAAAAAAAAAAAAAA' }),
+      });
+      assert.equal(unopen.status, 404);
+      assert.equal((await unopen.json()).error, 'root_not_open');
     });
   } finally {
-    rmSync(rootA, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/history-size: historySizeBytes is null without a root and 404s on an unopen key', async () => {
+  const root = tmp('showmd-settings-root-');
+  try {
+    await withServer(root, async (base) => {
+      const unscoped = await (await fetch(`${base}/api/history-size`)).json();
+      assert.equal(unscoped.historySizeBytes, null);
+
+      const unopen = await fetch(`${base}/api/history-size?root=r_AAAAAAAAAAAAAAAAAAAAAA`);
+      assert.equal(unopen.status, 404);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -325,20 +345,23 @@ test('POST /api/install-app: unsupported platform -> 501, no install attempted',
   }, { platform: 'freebsd' });
 });
 
-test('GET /api/settings: includes historyTotalBytes summed across every shadow repo', async () => {
+test('GET /api/history-size: includes historyTotalBytes summed across every shadow repo', async () => {
+  // the shared repo now spans every root this test file has touched, so this
+  // test needs a clean store to compare an exact total against
+  await require('../../server/history.js').pruneAll();
   const rootA = tmp('showmd-total-a-');
   const rootB = tmp('showmd-total-b-');
   try {
     writeFileSync(path.join(rootA, 'a.md'), '# a\n');
-    await withServer(rootA, async (base) => {
-      await fetch(`${base}/api/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
-      const before = await (await fetch(`${base}/api/settings`)).json();
+    await withServer(rootA, async (base, revealed, key) => {
+      await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
+      const before = await (await fetch(`${base}/api/history-size`)).json();
       assert.ok(before.historyTotalBytes > 0);
     });
     writeFileSync(path.join(rootB, 'b.md'), '# b\n');
-    await withServer(rootB, async (base) => {
-      await fetch(`${base}/api/raw?path=${encodeURIComponent('b.md')}`, { method: 'PUT', body: '# b changed\n' });
-      const after = await (await fetch(`${base}/api/settings`)).json();
+    await withServer(rootB, async (base, revealed, key) => {
+      await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('b.md')}`, { method: 'PUT', body: '# b changed\n' });
+      const after = await (await fetch(`${base}/api/history-size`)).json();
       // rootA's shadow repo is still on disk, so the total covers both roots
       const rootAOnly = await require('../../server/history.js').historySize(rootA);
       const rootBOnly = await require('../../server/history.js').historySize(rootB);
@@ -367,6 +390,9 @@ test('POST /api/prune: invalid scope -> 400', async () => {
   }
 });
 
+// otherDir and historyDirFor(root) are now the same shared repo (one repo per
+// drive, not per root), so this only proves scope=all wipes the store itself;
+// test/unit/history.test.mjs's migration/prune tests cover cross-root sharing
 test('POST /api/prune: scope=all removes every shadow repo, not just the served root\'s', async () => {
   const root = tmp('showmd-prune-all-');
   const otherDir = historyDirFor(tmp('showmd-prune-all-other-'));
@@ -374,8 +400,8 @@ test('POST /api/prune: scope=all removes every shadow repo, not just the served 
     mkdirSync(otherDir, { recursive: true });
     writeFileSync(path.join(otherDir, 'marker'), 'x');
     writeFileSync(path.join(root, 'a.md'), '# a\n');
-    await withServer(root, async (base) => {
-      await fetch(`${base}/api/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
+    await withServer(root, async (base, revealed, key) => {
+      await fetch(`${base}/api/roots/${key}/raw?path=${encodeURIComponent('a.md')}`, { method: 'PUT', body: '# a changed\n' });
       assert.ok(existsSync(historyDirFor(root)));
       assert.ok(existsSync(otherDir));
 
@@ -509,10 +535,118 @@ test('POST /api/restart: responds 200 and invokes the injected restartFn instead
     const res = await fetch(`${base}/api/restart`, { method: 'POST' });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { ok: true });
-    // restart runs off setImmediate, after the response is already sent
-    await new Promise((resolve) => setImmediate(resolve));
+    // restart is scheduled after the response is sent and after the
+    // server-restarting broadcast has read settings, so it lands a few ticks out
+    await waitUntil(() => called === 1);
     assert.equal(called, 1);
   }, { restartFn });
+});
+
+test('POST /api/restart: two concurrent requests only invoke restartFn once', async () => {
+  let called = 0;
+  const restartFn = () => { called++; };
+  await withInstallServer(async (base) => {
+    const [res1, res2] = await Promise.all([
+      fetch(`${base}/api/restart`, { method: 'POST' }),
+      fetch(`${base}/api/restart`, { method: 'POST' }),
+    ]);
+    assert.equal(res1.status, 200);
+    assert.equal(res2.status, 200);
+    await waitUntil(() => called === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(called, 1, 'the second concurrent call is a no-op');
+  }, { restartFn });
+});
+
+async function waitUntil(predicate, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return false;
+}
+
+async function waitForFile(file, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (existsSync(file)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+async function waitForGone(file, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!existsSync(file)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+test('POST /api/shutdown: responds 200, stops the server, and removes its registry entry (no respawn)', async () => {
+  const root = tmp('showmd-shutdown-');
+  const announceFile = path.join(process.env.SHOWMD_SETTINGS_HOME, 'ports', `${process.pid}.json`);
+  let exitCode = null;
+  const server = createServer(root, { exitFn: (code) => { exitCode = code; } });
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.ok(await waitForFile(announceFile), 'registry entry written on listen');
+
+    const closed = new Promise((resolve) => server.once('close', resolve));
+    const res = await fetch(`${base}/api/shutdown`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+
+    await closed;
+    assert.equal(exitCode, 0);
+    await assert.rejects(() => fetch(base), 'server no longer accepts connections');
+    assert.ok(await waitForGone(announceFile), 'registry entry removed after shutdown');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/shutdown: two concurrent requests only close/exit once', async () => {
+  const root = tmp('showmd-shutdown-concurrent-');
+  let exitCalls = 0;
+  const server = createServer(root, { exitFn: () => { exitCalls++; } });
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const closed = new Promise((resolve) => server.once('close', resolve));
+
+    const [res1, res2] = await Promise.all([
+      fetch(`${base}/api/shutdown`, { method: 'POST' }),
+      fetch(`${base}/api/shutdown`, { method: 'POST' }).catch(() => null),
+    ]);
+    assert.equal(res1.status, 200);
+    if (res2) assert.equal(res2.status, 200);
+
+    await closed;
+    assert.equal(exitCalls, 1, 'the second concurrent call is a no-op');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('per-instance ports/<pid>.json: announced on listen with {port, pid}, retracted on close', async () => {
+  const { list } = require('../../server/ports.js');
+  const root = tmp('showmd-ports-registry-');
+  const announceFile = path.join(process.env.SHOWMD_SETTINGS_HOME, 'ports', `${process.pid}.json`);
+  const server = createServer(root);
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    assert.ok(await waitForFile(announceFile), 'per-instance file written on listen');
+    assert.deepEqual(JSON.parse(readFileSync(announceFile, 'utf8')), { port: server.address().port, pid: process.pid });
+    assert.deepEqual(await list(), [{ port: server.address().port, pid: process.pid }]);
+  } finally {
+    server.close();
+    assert.ok(await waitForGone(announceFile), 'per-instance file removed on close');
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('createServer(root): booting with a real root records it as a recent entry', async () => {
