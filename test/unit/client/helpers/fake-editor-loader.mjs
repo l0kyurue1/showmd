@@ -11,7 +11,7 @@ export function createEditor(host, { doc, onChange, onSave, onToggleMode }) {
   let content = doc || '';
   let editing = false;
   host.dataset.fakeEditor = '1';
-  return {
+  const api = {
     getContent: () => content,
     setContent: (text) => { content = text; },
     setEdit: (value) => { editing = value; },
@@ -31,6 +31,10 @@ export function createEditor(host, { doc, onChange, onSave, onToggleMode }) {
     _fireSave: () => onSave(),
     _fireToggleMode: () => onToggleMode(),
   };
+  // exposed on the host so tests can reach the instance app.js keeps in its
+  // own module-scoped cmEditor without a second export path
+  host.fakeEditor = api;
+  return api;
 }
 `;
 

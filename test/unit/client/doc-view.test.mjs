@@ -35,8 +35,13 @@ function mount() {
   document.getElementById('doc').innerHTML = '';
   const doc = document.getElementById('doc');
   const pipeline = fakePipeline();
-  const enhanceCalls = [];
-  const blocks = { enhance: (el) => enhanceCalls.push(el) };
+  const blockRenderCalls = [];
+  const blocks = {
+    renderDocumentInto: async (el, source) => {
+      blockRenderCalls.push({ el, source });
+      el.innerHTML = pipeline.render(source);
+    },
+  };
   const scheduleCalls = [];
   const save = { schedule: () => scheduleCalls.push(true) };
   const docView = createDocView({
@@ -47,7 +52,7 @@ function mount() {
     renderProperties: () => {},
     refreshInfo: () => {},
   });
-  return { doc, docView, enhanceCalls, scheduleCalls };
+  return { doc, docView, blockRenderCalls, scheduleCalls };
 }
 
 test('toggleTaskAt computes the right line in a document with frontmatter', () => {
@@ -102,9 +107,9 @@ test('collapse state survives a re-render of the same document', () => {
   assert.equal(headingsAfter[0].classList.contains('h-collapsed'), true);
 });
 
-test('enhanceDoc calls through to the Block Renderer', () => {
-  const { doc, docView, enhanceCalls } = mount();
+test('Read Mode delegates document rendering through the Block Renderer interface', () => {
+  const { doc, docView, blockRenderCalls } = mount();
   docView.renderDoc('plain text');
-  assert.equal(enhanceCalls.length, 1);
-  assert.equal(enhanceCalls[0], doc);
+  assert.equal(blockRenderCalls.length, 1);
+  assert.deepEqual(blockRenderCalls[0], { el: doc, source: 'plain text' });
 });

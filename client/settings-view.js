@@ -1,4 +1,6 @@
 import { buildUpdateCta } from './update-cta.js';
+import { confirmDialog } from './confirm-dialog.js';
+import { followRestart } from './restart-follow.js';
 
 export const FONT_PRESETS = {
   default: { label: 'Default', family: 'var(--sans)' },
@@ -35,7 +37,7 @@ export const SETTINGS_GROUPS = [
     ],
   },
   {
-    title: 'Server',
+    title: 'General',
     badge: 'Restart required',
     rows: [
       { key: 'browser', label: 'Browser', desc: 'Browser used to open showmd.', control: 'select', options: [['default', 'System default']] },
@@ -45,7 +47,8 @@ export const SETTINGS_GROUPS = [
   {
     title: 'Maintenance',
     rows: [
-      { key: 'prune', label: 'This folder\'s history', desc: 'Remove saved edit history for this folder.', control: 'action', buttonLabel: 'Prune…' },
+      { key: 'historyRoot', label: 'History folder', desc: 'Which open folder the history action below applies to.', control: 'select', options: [['', 'No folder']] },
+      { key: 'prune', label: 'Selected folder\'s history', desc: 'Remove saved edit history for the folder selected above.', control: 'action', buttonLabel: 'Prune…' },
       { key: 'pruneAll', label: 'All saved histories', desc: 'Remove saved edit history for every folder you\'ve opened in showmd.', control: 'action', buttonLabel: 'Prune all…', danger: true },
       { key: 'resetAll', label: 'Reset all settings', desc: 'Restore every setting on this page to its default.', control: 'action', buttonLabel: 'Reset all' },
     ],
@@ -90,14 +93,23 @@ export function applyDerivedValues(values) {
       : values.checkFailed ? `${version} · last check failed`
       : `${version} · up to date`;
   }
+  // historySizeBytes/historyTotalBytes arrive from a separate, slower
+  // request than the rest of these values (GET /api/history-size) — absent
+  // (undefined) means still loading, null means no folder is selected
   const pruneRow = rowByKey('prune');
   if (pruneRow) {
-    pruneRow.label = values.historySizeBytes == null ? "This folder's history" : `This folder's history · ${formatBytes(values.historySizeBytes)}`;
-    pruneRow.disabled = values.historySizeBytes == null;
+    const loading = values.historySizeBytes === undefined;
+    pruneRow.label = loading ? "Selected folder's history · …"
+      : values.historySizeBytes == null ? "Selected folder's history"
+      : `Selected folder's history · ${formatBytes(values.historySizeBytes)}`;
+    pruneRow.disabled = loading || values.historySizeBytes == null;
   }
   const pruneAllRow = rowByKey('pruneAll');
   if (pruneAllRow) {
-    pruneAllRow.label = values.historyTotalBytes == null ? 'All saved histories' : `All saved histories · ${formatBytes(values.historyTotalBytes)}`;
+    const loading = values.historyTotalBytes === undefined;
+    pruneAllRow.label = loading ? 'All saved histories · …'
+      : values.historyTotalBytes == null ? 'All saved histories'
+      : `All saved histories · ${formatBytes(values.historyTotalBytes)}`;
   }
   const installRow = rowByKey('installApp');
   if (installRow) {
@@ -196,7 +208,7 @@ export function createSettingsView({
   root, ctaEl, api, fetchSettings, saveSetting,
   chevronSvg, positionTip,
   setTheme, applyFontPreset, applyFontSize,
-  returnsHome, onBack,
+  getRootKey, onSelectRoot, backLabel, onBack,
 }) {
   let justUpdatedVersion = null;
   let restarting = false;
@@ -204,6 +216,9 @@ export function createSettingsView({
   // open() close a still-open menu before replaceChildren() orphans its
   // document listeners (e.g. an SSE-triggered rebuild mid-open)
   let closeOpenMenu = null;
+  // the values object loadHistorySizes() patches once its slow fetch
+  // resolves, after the rest of the page already rendered from fetchSettings()
+  let lastValues = {};
 
   async function installApp(btn, statusEl) {
     btn.disabled = true;
@@ -238,42 +253,11 @@ export function createSettingsView({
     }
   }
 
-  // first modal in showmd: native <dialog> gives focus trap, Escape-to-cancel and
-  // backdrop dimming for free. The dialog itself carries no padding, so its box
-  // exactly matches the visible card — a click landing on `dialog` itself (not a
-  // descendant) is therefore always a backdrop click.
-  function confirmDialogEl(id, { title, body, confirmLabel }) {
-    let dialog = document.getElementById(id);
-    if (dialog) return dialog;
-    dialog = document.createElement('dialog');
-    dialog.id = id;
-    dialog.className = 'confirm-dialog';
-    dialog.innerHTML = `<form method="dialog" class="confirm-dialog-card">
-    <div class="confirm-dialog-title">${title}</div>
-    <p class="confirm-dialog-body">${body}</p>
-    <div class="confirm-dialog-actions">
-      <button type="submit" value="cancel" autofocus>Cancel</button>
-      <button type="submit" value="confirm" class="confirm-dialog-danger">${confirmLabel}</button>
-    </div>
-  </form>`;
-    document.body.appendChild(dialog);
-    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close('cancel'); });
-    return dialog;
-  }
-
-  async function confirmDialog(id, opts) {
-    const dialog = confirmDialogEl(id, opts);
-    dialog.showModal();
-    return new Promise((resolve) => {
-      dialog.addEventListener('close', () => resolve(dialog.returnValue), { once: true });
-    });
-  }
-
   async function runPrune(btn, statusEl, scope) {
     btn.disabled = true;
     statusEl.textContent = 'Removing…';
     try {
-      const res = await api.prune(scope);
+      const res = await api.prune(scope, getRootKey());
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refreshDerived();
     } catch {
@@ -300,30 +284,6 @@ export function createSettingsView({
     if (choice === 'confirm') await runPrune(btn, statusEl, 'all');
   }
 
-  function wait(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // same-origin: a plain fetch can read the response, so success means "up".
-  // cross-origin (port changed): the browser still blocks reading the response
-  // body, but a resolved no-cors fetch (even an opaque one) still proves the
-  // port is accepting connections — good enough for "is it back yet".
-  async function pollUntilUp(url, sameOrigin) {
-    for (let i = 0; i < 100; i++) {
-      await wait(200);
-      try {
-        if (sameOrigin) {
-          const res = await api.ping(url, { cache: 'no-store' });
-          if (res.ok) return true;
-        } else {
-          await api.ping(url, { mode: 'no-cors', cache: 'no-store' });
-          return true;
-        }
-      } catch {}
-    }
-    return false;
-  }
-
   async function restartServer(chip, values) {
     if (restarting) return;
     restarting = true;
@@ -339,16 +299,18 @@ export function createSettingsView({
       restarting = false;
       return;
     }
-    const samePort = values.port === values.effective.port;
-    if (samePort) {
-      await pollUntilUp('/api/settings', true);
-      restarting = false;
-      await open();
-    } else {
-      const newOrigin = `http://127.0.0.1:${values.port}`;
-      await pollUntilUp(`${newOrigin}/api/settings`, false);
-      window.location.href = newOrigin + window.location.pathname + window.location.search;
+    const result = await followRestart(values.port, {
+      pathname: window.location.pathname, search: window.location.search, hash: window.location.hash,
+    });
+    restarting = false;
+    if (!result.ok) {
+      if (label) label.textContent = 'Restart failed';
+      chip.disabled = false;
+      return;
     }
+    // cross-port success already navigated the tab away; only same-port
+    // needs an in-place refresh since the origin never changed
+    if (result.samePort) await open();
   }
 
   function renderCta(values) {
@@ -497,7 +459,10 @@ export function createSettingsView({
     rowEl.dataset.key = row.key;
     const textEl = document.createElement('div');
     textEl.className = 'settings-row-text';
-    textEl.innerHTML = `<div class="settings-row-head"><div class="settings-row-label">${row.label}</div></div><div class="settings-row-desc">${row.desc}</div>`;
+    // textContent, not interpolation: a row label can carry a folder name
+    textEl.innerHTML = '<div class="settings-row-head"><div class="settings-row-label"></div></div><div class="settings-row-desc"></div>';
+    textEl.querySelector('.settings-row-label').textContent = row.label;
+    textEl.querySelector('.settings-row-desc').textContent = row.desc;
     const controlEl = document.createElement('div');
     controlEl.className = 'settings-row-control';
     if (row.control !== 'action' && row.control !== 'link' && defaults && row.key in defaults) {
@@ -514,7 +479,8 @@ export function createSettingsView({
     }
     if (row.key === 'installApp') controlEl.classList.add('settings-row-control-stacked');
     if (row.control === 'select') {
-      controlEl.appendChild(buildCustomSelect(row, value, (v) => saveAndRefresh(row, v)));
+      const onChange = row.key === 'historyRoot' ? onSelectRoot : (v) => saveAndRefresh(row, v);
+      controlEl.appendChild(buildCustomSelect(row, value, onChange));
     } else if (row.control === 'number') {
       const input = document.createElement('input');
       input.type = 'number';
@@ -659,8 +625,27 @@ export function createSettingsView({
     }
   }
 
+  // GET /api/history-size is its own slow prefix query over the shadow git
+  // store, so it never rides along with fetchSettings() — the two size rows
+  // render a loading placeholder first and patch in once this resolves
+  async function loadHistorySizes() {
+    let sizes;
+    try {
+      const res = await api.getHistorySize(getRootKey());
+      if (!res.ok) return;
+      sizes = await res.json();
+    } catch {
+      return;
+    }
+    Object.assign(lastValues, sizes);
+    applyDerivedValues(lastValues);
+    patchRowText('prune');
+    patchRowText('pruneAll');
+  }
+
   async function refreshDerived(row, value) {
     const values = await fetchSettings();
+    lastValues = values;
     const restartNeeded = applyDerivedValues(values);
     if (row) {
       const rowEl = root.querySelector(`[data-key="${row.key}"]`);
@@ -669,6 +654,21 @@ export function createSettingsView({
     for (const key of ['updateCheck', 'prune', 'pruneAll', 'installApp', 'registerMarkdown']) patchRowText(key);
     patchRestartChips(restartNeeded, values);
     renderCta(values);
+    loadHistorySizes();
+  }
+
+  // the selector lists what is open right now, not what was open at boot: a
+  // root closed in another tab must not stay prunable here
+  async function applyOpenRoots() {
+    const row = rowByKey('historyRoot');
+    if (!row) return;
+    let roots = [];
+    try {
+      const res = await api.listRoots();
+      if (res.ok) roots = (await res.json()).roots || [];
+    } catch {}
+    row.options = [['', 'No folder'], ...roots.map((r) => [r.key, r.name])];
+    row.hidden = roots.length === 0;
   }
 
   async function open() {
@@ -677,11 +677,13 @@ export function createSettingsView({
     const back = document.createElement('a');
     back.href = '#';
     back.className = 'settings-back';
-    back.textContent = returnsHome() ? '← Back to Home' : '← Back';
+    back.textContent = backLabel();
     back.addEventListener('click', (e) => { e.preventDefault(); onBack(); });
     root.appendChild(back);
     const values = await fetchSettings();
+    lastValues = values;
     const restartNeeded = applyDerivedValues(values);
+    await applyOpenRoots();
     renderCta(values);
     for (const group of SETTINGS_GROUPS) {
       const groupEl = document.createElement('div');
@@ -703,11 +705,13 @@ export function createSettingsView({
       groupEl.appendChild(titleEl);
       for (const row of group.rows) {
         if (row.hidden) continue;
-        groupEl.appendChild(buildSettingsRow(row, values[row.key], values.defaults));
+        const value = row.key === 'historyRoot' ? (getRootKey() || '') : values[row.key];
+        groupEl.appendChild(buildSettingsRow(row, value, values.defaults));
       }
       if (group.title === 'Appearance') groupEl.appendChild(buildFontPreview());
       root.appendChild(groupEl);
     }
+    loadHistorySizes();
   }
 
   return { open, renderCta, menuOpen: () => !!closeOpenMenu };

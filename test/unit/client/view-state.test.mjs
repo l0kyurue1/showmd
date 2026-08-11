@@ -229,18 +229,17 @@ test('asking for the source already showing is inert', () => {
 
 test('the hash names the view, and only the views worth reopening', () => {
   assert.equal(hashFor(INITIAL_VIEW), '');
-  assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'settings-open' })), '#settings');
-  assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'launcher-open' })), '#home');
+  assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'settings-open' })), '', 'Settings reloads off its own pathname, not a hash');
+  assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'launcher-open' })), '', 'Home reloads off its own pathname, not a hash');
   assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'source', source: 'skills' })), '#skills');
   assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'source', source: 'agents' })), '#agents');
   assert.equal(hashFor(nextView(INITIAL_VIEW, { type: 'version', rev: 'abc1234' })), '');
 });
 
-test('the pane the hash reopens is the pane that wrote it', () => {
-  const reopens = { '#settings': 'settings', '#home': 'launcher' };
+test('every hash still written names the source tree that wrote it', () => {
   for (const view of reachable()) {
     const hash = hashFor(view);
-    if (reopens[hash]) assert.equal(visiblePane(view), reopens[hash], JSON.stringify(view));
+    if (hash) assert.equal(hash, `#${view.source}`, JSON.stringify(view));
   }
 });
 
@@ -338,4 +337,15 @@ test('a beforeCommit dispatch still commits even when beforeCommit throws', asyn
     beforeCommit: () => { throw new Error('boom'); },
   }));
   assert.equal(paneEl('diff').hidden, false, 'commit still ran despite the throw');
+});
+
+test('commit preserves location.search: a ?scope= query survives an overlay toggle', () => {
+  history.replaceState(null, '', '/r/r_test/doc.md?scope=docs');
+  const { viewState } = mountViewState();
+  viewState.dispatch({ type: 'settings-open' });
+  assert.equal(location.pathname, '/r/r_test/doc.md');
+  assert.equal(location.search, '?scope=docs');
+  assert.equal(location.hash, '');
+  viewState.dispatch({ type: 'settings-close' });
+  assert.equal(location.search, '?scope=docs', 'closing the overlay must not drop the query');
 });

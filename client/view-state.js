@@ -59,9 +59,9 @@ export function isVersionOpen(view) {
 // the view's serialization format, never an input to it: a hash survives reload
 // without needing a server route, and leaves the file in the pathname for the
 // view to fall back to on close
+// Home and Settings have their own pathnames (set via navigateTo) and need no
+// hash token: only Skills/Agents still reload through an overlay hash.
 export function hashFor(view) {
-  if (view.overlay === 'settings') return '#settings';
-  if (view.overlay === 'launcher') return '#home';
   if (view.source !== 'files') return `#${view.source}`;
   return '';
 }
@@ -84,7 +84,7 @@ export function createViewState({ panes, toolbar, sourceBtn, editBtn, readBtn, s
     skillsFooterBtn.classList.toggle('active', view.source === 'skills');
     agentsFooterBtn.classList.toggle('active', view.source === 'agents');
     // replaceState, never push: the hash is a reload token, not a history entry
-    history.replaceState(history.state, '', location.pathname + hashFor(view));
+    history.replaceState(history.state, '', location.pathname + location.search + hashFor(view));
   }
 
   // beforeCommit lets a caller finish preparing what the new pane will show

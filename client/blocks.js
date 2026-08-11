@@ -36,8 +36,13 @@ function currentTheme() {
 
 // `load` yields a vendor lib, it is not the lib: katex and mermaid are several
 // hundred KB each and must not be fetched until a block actually needs one.
-export function createBlockRenderer({ markdown, load = (name) => VENDOR[name]() }) {
+export function createBlockRenderer({
+  markdown,
+  load = (name) => VENDOR[name](),
+  reportError = (message, error) => console.error(message, error),
+}) {
   const pending = new Map();
+  const renderRequests = new WeakMap();
   const vendor = (name) => {
     if (!pending.has(name)) pending.set(name, load(name));
     return pending.get(name);
@@ -153,6 +158,7 @@ export function createBlockRenderer({ markdown, load = (name) => VENDOR[name]() 
         holder.className = 'mermaid-diagram';
         holder.innerHTML = svg;
       } catch (err) {
+        reportError('showmd: mermaid render failed', err);
         holder = mermaidErrorEl(source, err);
       }
       holder.dataset.src = source;
@@ -160,30 +166,90 @@ export function createBlockRenderer({ markdown, load = (name) => VENDOR[name]() 
     }
   }
 
-  return {
-    markdown,
-    currentTheme,
+  // Install the initial DOM synchronously so adapters can attach their own
+  // interactions before the returned enhancement promise settles.
+  async function renderDocumentInto(target, source) {
+    if (!target || target.nodeType !== 1) throw new TypeError('Block Renderer target must be an element');
+    if (typeof source !== 'string') throw new TypeError('Block Renderer source must be a string');
 
-    async mathHTML(src, display) {
-      const katex = await vendor('katex');
-      return katex.renderToString(src, { displayMode: display, throwOnError: false });
-    },
+    try {
+      target.innerHTML = markdown(source);
+    } catch (error) {
+      reportError('showmd: markdown render failed', error);
+      target.textContent = source;
+      return;
+    }
 
-    highlightCodeIn,
-    addCopyButtonsIn,
-    renderMathIn,
-    mermaidSVG,
-    mermaidErrorEl,
-    renderMermaidIn,
+    const attempt = (message, operation) => operation.catch((error) => reportError(message, error));
+    const enhancements = [
+      attempt('showmd: mermaid render failed', renderMermaidIn(target)),
+      attempt('showmd: code highlight failed', highlightCodeIn(target)),
+    ];
+    addCopyButtonsIn(target);
+    if (target.textContent.includes('$')) {
+      enhancements.push(attempt('showmd: math render failed', renderMathIn(target)));
+    }
+    await Promise.all(enhancements);
+  }
 
-    enhance(rootEl) {
-      renderMermaidIn(rootEl).catch((err) => console.error('showmd: mermaid enhance failed', err));
-      highlightCodeIn(rootEl).catch((err) => console.error('showmd: hljs enhance failed', err));
-      addCopyButtonsIn(rootEl);
-      // `$` pre-check is a heuristic: a lone currency `$` costs one wasted katex load, nothing more
-      if (rootEl.textContent.includes('$')) {
-        renderMathIn(rootEl).catch((err) => console.error('showmd: katex enhance failed', err));
+  async function refreshThemeIn(target) {
+    if (!target || target.nodeType !== 1) throw new TypeError('Block Renderer target must be an element');
+    try {
+      await renderMermaidIn(target);
+    } catch (error) {
+      reportError('showmd: mermaid theme refresh failed', error);
+    }
+  }
+
+  async function renderBlockInto(target, request) {
+    if (!target || target.nodeType !== 1) throw new TypeError('Block Renderer target must be an element');
+    if (!request || !['markdown', 'math', 'mermaid'].includes(request.kind)) {
+      throw new TypeError('Block Renderer request has an unknown kind');
+    }
+    if (typeof request.source !== 'string') throw new TypeError('Block Renderer request source must be a string');
+
+    const token = {};
+    renderRequests.set(target, token);
+    const isCurrent = () => renderRequests.get(target) === token;
+
+    if (request.kind === 'markdown') {
+      try {
+        target.innerHTML = markdown(request.source);
+      } catch (error) {
+        reportError('showmd: markdown render failed', error);
+        target.textContent = request.source;
+        return;
       }
-    },
-  };
+      try {
+        await highlightCodeIn(target);
+      } catch (error) {
+        if (isCurrent()) reportError('showmd: code highlight failed', error);
+      }
+    } else if (request.kind === 'math') {
+      target.textContent = request.source;
+      try {
+        const katex = await vendor('katex');
+        const html = katex.renderToString(request.source, {
+          displayMode: Boolean(request.display),
+          throwOnError: false,
+        });
+        if (isCurrent()) target.innerHTML = html;
+      } catch (error) {
+        if (isCurrent()) reportError('showmd: math render failed', error);
+      }
+    } else if (request.kind === 'mermaid') {
+      target.textContent = 'Rendering diagram…';
+      try {
+        const svg = await mermaidSVG(request.source);
+        if (isCurrent()) target.innerHTML = svg;
+      } catch (error) {
+        if (isCurrent()) {
+          reportError('showmd: mermaid render failed', error);
+          target.replaceChildren(mermaidErrorEl(request.source, error));
+        }
+      }
+    }
+  }
+
+  return { renderDocumentInto, renderBlockInto, refreshThemeIn };
 }
