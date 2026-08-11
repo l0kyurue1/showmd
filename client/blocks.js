@@ -51,6 +51,9 @@ export function createBlockRenderer({
   let mermaidTheme = null;
   let mermaidSeq = 0;
   const mermaidCache = new Map();
+  // keyed off the element, not a data-* attribute: a rendered diagram's source
+  // must not be re-readable (or forgeable) as DOM text on the next theme refresh
+  const mermaidSources = new WeakMap();
 
   async function ensureMermaid() {
     const mermaid = await vendor('mermaid');
@@ -169,7 +172,9 @@ export function createBlockRenderer({
   async function renderMermaidIn(rootEl) {
     const targets = [
       ...[...rootEl.querySelectorAll('pre > code.language-mermaid')].map((code) => ({ source: code.textContent, el: code.parentElement })),
-      ...[...rootEl.querySelectorAll('.mermaid-diagram[data-src], .mermaid-error[data-src]')].map((el) => ({ source: el.dataset.src, el })),
+      ...[...rootEl.querySelectorAll('.mermaid-diagram, .mermaid-error')]
+        .filter((el) => mermaidSources.has(el))
+        .map((el) => ({ source: mermaidSources.get(el), el })),
     ];
     for (const { source, el } of targets) {
       let holder;
@@ -182,7 +187,7 @@ export function createBlockRenderer({
         reportError('showmd: mermaid render failed', err);
         holder = mermaidErrorEl(source, err);
       }
-      holder.dataset.src = source;
+      mermaidSources.set(holder, source);
       el.replaceWith(holder);
     }
   }
