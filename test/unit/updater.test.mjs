@@ -24,7 +24,7 @@ test('successful update moves through updating and finishing, verifies exact ver
   const calls = [];
   const states = [];
   const controller = createUpdateController({
-    channel: 'npm-global', cliPath: '/global/node_modules/showmd-cli/bin/cli.js', execPath: '/node',
+    channel: 'npm-global', cliPath: '/global/node_modules/showmd-cli/bin/cli.js', execPath: '/node', platform: 'linux',
     run: async (command, args) => {
       calls.push([command, args]);
       return args.includes('--version') ? { err: null, stdout: '2.0.0\n' } : { err: null, stdout: '' };
