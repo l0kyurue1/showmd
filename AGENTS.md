@@ -50,6 +50,9 @@ The shipped CLI (`bin/cli.js --help` is the source of truth):
 - Single runtime dependency (`chokidar`) — do not add dependencies casually.
 - CSS changes must respect the CSS Variable Contract (see CONTRIBUTING.md);
   use the `?lab` palette workbench for color work.
+- These conventions cover the core package only. `contrib/raycast/` is a
+  separate TypeScript/React Raycast extension with its own dependencies; it
+  is excluded from the npm package (see `files` in package.json).
 
 ## Test policy
 
