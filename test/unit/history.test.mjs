@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-history-'));
 process.env.SHOWMD_HISTORY_HOME = path.join(workDir, 'history');
@@ -44,6 +44,17 @@ function ensureRepoHandlers() {
     (p, a) => a[0] === 'init' && { code: 0, stdout: '' },
     (p, a) => a[0] === 'config' && { code: 0, stdout: '' },
   ];
+}
+
+function permissiveHistoryExec(onCommit = async () => ({ code: 0, stdout: '' })) {
+  return fakeExec([
+    (p, a) => a[0] === '--version' && { code: 0, stdout: '' },
+    (p, a) => (a[0] === 'init' || a[0] === 'config' || a[0] === 'add') && { code: 0, stdout: '' },
+    (p, a) => a[0] === 'log' && { code: 128, stdout: '' },
+    (p, a) => a[0] === 'show' && { code: 128, stdout: '' },
+    (p, a) => a[0] === 'diff' && { code: 1, stdout: '' },
+    (p, a) => a[0] === 'commit' && onCommit(),
+  ]);
 }
 
 // the mocked roots below never exist on disk, so history.js's realpath step
@@ -285,6 +296,75 @@ test('two concurrent writers on the shared repo lose no history to lock contenti
   assert.equal(existsSync(`${gitDir}.lock`), false);
 });
 
+test('a stale-looking lock owned by a live process is never stolen', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-live-lock-');
+  const file = path.join(root, 'locked.md');
+  writeFileSync(file, '# locked\n');
+  const lockPath = `${historyDirFor(root)}.lock`;
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, JSON.stringify({ token: 'live-owner', pid: process.pid }));
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(lockPath, old, old);
+
+  const history = createHistory(undefined, { lockStaleMs: 10, lockTimeoutMs: 50, lockPollMs: 5 });
+  await assert.rejects(
+    history.record(root, 'locked.md', 'user'),
+    (err) => err && err.code === 'ELOCKTIMEOUT',
+  );
+  assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).token, 'live-owner');
+  rmSync(lockPath, { force: true });
+});
+
+test('heartbeat keeps a long history operation exclusive beyond the stale threshold', async () => {
+  const root = path.join(workDir, 'heartbeat-root');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(path.join(root, 'doc.md'), '# one\n');
+  let releaseCommit;
+  let enteredCommit;
+  const commitEntered = new Promise((resolve) => { enteredCommit = resolve; });
+  const holdCommit = new Promise((resolve) => { releaseCommit = resolve; });
+  const firstExec = permissiveHistoryExec(async () => {
+    enteredCommit();
+    await holdCommit;
+    return { code: 0, stdout: '' };
+  });
+  const secondExec = permissiveHistoryExec();
+  const lockOptions = {
+    lockStaleMs: 15, lockHeartbeatMs: 5, lockTimeoutMs: 30, lockPollMs: 2,
+    lockPidAlive: () => false,
+  };
+  const first = createHistory(firstExec, lockOptions);
+  const second = createHistory(secondExec, lockOptions);
+
+  const firstRecord = first.record(root, 'doc.md', 'user');
+  await commitEntered;
+  const secondRecord = second.record(root, 'doc.md', 'external');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(secondExec.calls.some((call) => ['init', 'add', 'commit'].includes(call.args[0])), false,
+    'the contender has not entered a mutating git operation');
+
+  releaseCommit();
+  await Promise.all([firstRecord, secondRecord]);
+  assert.equal(secondExec.calls.some((call) => call.args[0] === 'commit'), true);
+});
+
+test('lock release preserves a replacement file owned by another token', async () => {
+  const root = path.join(workDir, 'replacement-lock-root');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(path.join(root, 'doc.md'), '# one\n');
+  const lockPath = `${historyDirFor(root)}.lock`;
+  const exec = permissiveHistoryExec(async () => {
+    rmSync(lockPath, { force: true });
+    writeFileSync(lockPath, JSON.stringify({ token: 'replacement-owner', pid: process.pid }));
+    return { code: 0, stdout: '' };
+  });
+
+  await createHistory(exec, { lockHeartbeatMs: 1000 }).record(root, 'doc.md', 'user');
+
+  assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).token, 'replacement-owner');
+  rmSync(lockPath, { force: true });
+});
+
 test('migration recovers a legacy per-root repo via its recorded core.worktree', { skip: !git && 'git unavailable' }, async () => {
   const home = process.env.SHOWMD_HISTORY_HOME;
   mkdirSync(home, { recursive: true });
@@ -311,7 +391,69 @@ test('migration recovers a legacy per-root repo via its recorded core.worktree',
   assert.equal(await history.contentAt(legacyRoot, 'notes.md', oldest.rev, false), 'v1');
 });
 
-test('a legacy repo with no core.worktree recorded is skipped and logged, not guessed', { skip: !git && 'git unavailable' }, async () => {
+test('migration preserves history reachable only from a non-current branch', { skip: !git && 'git unavailable' }, async () => {
+  const home = process.env.SHOWMD_HISTORY_HOME;
+  mkdirSync(home, { recursive: true });
+  const legacyRoot = realGitTmp('showmd-history-legacy-branch-');
+  writeFileSync(path.join(legacyRoot, 'current.md'), 'current');
+  const legacyGitDir = path.join(home, '4'.repeat(40));
+  const gitArgs = (...args) => execFileSync('git', ['--git-dir', legacyGitDir, '--work-tree', legacyRoot, ...args], { encoding: 'utf8' });
+  gitArgs('init', '-q');
+  gitArgs('config', 'user.name', 'showmd');
+  gitArgs('config', 'user.email', 'showmd@local');
+  gitArgs('add', '-f', '--', 'current.md');
+  gitArgs('commit', '-m', 'user: current.md');
+  const currentBranch = gitArgs('branch', '--show-current').trim();
+  gitArgs('switch', '-q', '-c', 'archive');
+  writeFileSync(path.join(legacyRoot, 'archived.md'), 'archived');
+  gitArgs('add', '-f', '--', 'archived.md');
+  gitArgs('commit', '-m', 'user: archived.md');
+  gitArgs('switch', '-q', currentBranch);
+
+  const history = createHistory();
+  await history.migrateLegacyHistory();
+
+  assert.ok(!existsSync(legacyGitDir));
+  const entries = await history.timeline(legacyRoot, 'archived.md');
+  assert.equal(entries.length, 1);
+  assert.equal(await history.contentAt(legacyRoot, 'archived.md', entries[0].rev, false), 'archived');
+});
+
+test('a legacy repo is preserved when commit enumeration fails for any historical path', { skip: !git && 'git unavailable' }, async () => {
+  const home = process.env.SHOWMD_HISTORY_HOME;
+  mkdirSync(home, { recursive: true });
+  const legacyRoot = realGitTmp('showmd-history-enumeration-failure-');
+  writeFileSync(path.join(legacyRoot, 'good.md'), 'recoverable');
+  writeFileSync(path.join(legacyRoot, 'bad.md'), 'must not be dropped');
+  const label = '5'.repeat(40);
+  const legacyGitDir = path.join(home, label);
+  const gitArgs = (...args) => execFileSync('git', ['--git-dir', legacyGitDir, '--work-tree', legacyRoot, ...args], { encoding: 'utf8' });
+  gitArgs('init', '-q');
+  gitArgs('config', 'user.name', 'showmd');
+  gitArgs('config', 'user.email', 'showmd@local');
+  gitArgs('add', '-f', '--', 'good.md', 'bad.md');
+  gitArgs('commit', '-m', 'user: two paths');
+
+  const failOnePath = async (prefixArgs, args, allowCodes, opts) => {
+    if (prefixArgs.some((arg) => arg.includes(label)) && args[0] === 'log' && args.at(-1) === 'bad.md') {
+      return { code: 128, stdout: '' };
+    }
+    const result = spawnSync('git', [...prefixArgs, ...args], { ...opts, encoding: 'utf8' });
+    if (result.error) throw result.error;
+    if (result.status === 0 || allowCodes.includes(result.status)) {
+      return { code: result.status, stdout: result.stdout || '' };
+    }
+    throw Object.assign(new Error(result.stderr || `git exited ${result.status}`), { code: result.status });
+  };
+
+  const history = createHistory(failOnePath);
+  await history.migrateLegacyHistory();
+
+  assert.ok(existsSync(legacyGitDir), 'the complete source remains recoverable after any enumeration failure');
+  rmSync(legacyGitDir, { recursive: true, force: true });
+});
+
+test('a legacy repo with no core.worktree is preserved and logged, not guessed or deleted', { skip: !git && 'git unavailable' }, async () => {
   const home = process.env.SHOWMD_HISTORY_HOME;
   mkdirSync(home, { recursive: true });
   const badGitDir = path.join(home, '2'.repeat(40));
@@ -328,8 +470,31 @@ test('a legacy repo with no core.worktree recorded is skipped and logged, not gu
     console.error = originalError;
   }
 
-  assert.ok(!existsSync(badGitDir), 'the unreadable legacy dir is still cleaned up after being skipped');
+  assert.ok(existsSync(badGitDir), 'an unreadable legacy repo remains available for recovery');
   assert.ok(logged.some((m) => m.includes('no core.worktree recorded')), 'the skip is logged, not silent');
+  rmSync(badGitDir, { recursive: true, force: true });
+});
+
+test('a legacy repo is preserved when any historical blob cannot be copied', { skip: !git && 'git unavailable' }, async () => {
+  const home = process.env.SHOWMD_HISTORY_HOME;
+  mkdirSync(home, { recursive: true });
+  const legacyRoot = realGitTmp('showmd-history-corrupt-legacy-');
+  writeFileSync(path.join(legacyRoot, 'notes.md'), 'recover me');
+  const legacyGitDir = path.join(home, '3'.repeat(40));
+  const gitArgs = (...args) => execFileSync('git', ['--git-dir', legacyGitDir, '--work-tree', legacyRoot, ...args], { encoding: 'utf8' });
+  gitArgs('init', '-q');
+  gitArgs('config', 'user.name', 'showmd');
+  gitArgs('config', 'user.email', 'showmd@local');
+  gitArgs('add', '-f', '--', 'notes.md');
+  gitArgs('commit', '-m', 'user: notes.md');
+  const blob = gitArgs('rev-parse', 'HEAD:notes.md').trim();
+  rmSync(path.join(legacyGitDir, 'objects', blob.slice(0, 2), blob.slice(2)), { force: true });
+
+  const history = createHistory();
+  await history.migrateLegacyHistory();
+
+  assert.ok(existsSync(legacyGitDir), 'the only copy is retained when migration cannot read a blob');
+  rmSync(legacyGitDir, { recursive: true, force: true });
 });
 
 test('historySize is a prefix query: it only counts a root\'s own tracked paths', { skip: !git && 'git unavailable' }, async () => {

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,7 @@ async function withServer(fn) {
     await fn(base, roots.roots[0].key);
   } finally {
     server.close();
+    await server.whenClosed();
     rmSync(root, { recursive: true, force: true });
   }
 }

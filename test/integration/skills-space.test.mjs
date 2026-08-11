@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import '../helpers/isolate-state.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,7 @@ async function withSkillsHome(fn) {
     await fn(`http://127.0.0.1:${server.address().port}`, home);
   } finally {
     server.close();
+    await server.whenClosed();
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     if (prevSettings === undefined) delete process.env.SHOWMD_SETTINGS_HOME;
