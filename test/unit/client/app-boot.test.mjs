@@ -765,10 +765,9 @@ test('a server-restarting SSE event for a port change polls the replacement orig
     files: { 'a.md': '# Title' },
   });
 
-  const before = h.fetch.calls.length;
   h.EventSource.instances[0].emit({ event: 'server-restarting', port: 4321 });
   assert.equal(h.document.getElementById('save-chip-text').textContent, 'Restarting…');
-  await h.waitFor(() => h.fetch.calls.length > before);
+  await h.waitFor(() => h.fetch.calls.some((c) => c.url.href.startsWith('http://localhost:4321/')));
 
   const pinged = h.fetch.calls.some((c) => c.url.href.startsWith('http://localhost:4321/'));
   assert.ok(pinged, 'polls the replacement origin, not the dead one');

@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, utimesSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { identityPath } = require('../../server/root-identity.js');
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'showmd-history-'));
 process.env.SHOWMD_HISTORY_HOME = path.join(workDir, 'history');
@@ -57,12 +61,21 @@ function permissiveHistoryExec(onCommit = async () => ({ code: 0, stdout: '' }))
   ]);
 }
 
-// the mocked roots below never exist on disk, so history.js's realpath step
-// falls back to path.resolve(root) unchanged — this mirrors that fallback to
-// predict the exact store-relative path a commit subject will carry
+// The mocked roots below never exist on disk, so history.js's realpath step
+// falls back to path.resolve(root), then applies the shared platform identity
+// rules (notably case folding on Windows).
 function storeRelPathFor(root, relPath) {
-  const driveRoot = path.parse(root).root;
-  return path.relative(driveRoot, path.join(path.resolve(root), relPath)).split(path.sep).join('/');
+  const canonicalRoot = identityPath(path.resolve(root));
+  const driveRoot = path.parse(canonicalRoot).root;
+  return path.relative(driveRoot, path.join(canonicalRoot, relPath)).split(path.sep).join('/');
+}
+
+async function waitFor(condition, { timeout = 2000, interval = 10 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
 }
 
 // git commit timestamps are second-granular (%ct), so the boundary is tested
@@ -330,22 +343,36 @@ test('heartbeat keeps a long history operation exclusive beyond the stale thresh
   });
   const secondExec = permissiveHistoryExec();
   const lockOptions = {
-    lockStaleMs: 15, lockHeartbeatMs: 5, lockTimeoutMs: 30, lockPollMs: 2,
+    lockStaleMs: 120, lockHeartbeatMs: 30, lockTimeoutMs: 1000, lockPollMs: 10,
     lockPidAlive: () => false,
   };
   const first = createHistory(firstExec, lockOptions);
   const second = createHistory(secondExec, lockOptions);
 
   const firstRecord = first.record(root, 'doc.md', 'user');
-  await commitEntered;
-  const secondRecord = second.record(root, 'doc.md', 'external');
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.equal(secondExec.calls.some((call) => ['init', 'add', 'commit'].includes(call.args[0])), false,
-    'the contender has not entered a mutating git operation');
+  let secondRecord;
+  let released = false;
+  try {
+    await commitEntered;
+    const lockPath = `${historyDirFor(root)}.lock`;
+    const initialMtime = statSync(lockPath).mtimeMs;
+    const contestedAt = Date.now();
+    secondRecord = second.record(root, 'doc.md', 'external');
+    await waitFor(() => (
+      Date.now() - contestedAt > lockOptions.lockStaleMs * 2
+      && statSync(lockPath).mtimeMs > initialMtime
+    ));
+    assert.equal(secondExec.calls.some((call) => ['init', 'add', 'commit'].includes(call.args[0])), false,
+      'the contender has not entered a mutating git operation');
 
-  releaseCommit();
-  await Promise.all([firstRecord, secondRecord]);
-  assert.equal(secondExec.calls.some((call) => call.args[0] === 'commit'), true);
+    releaseCommit();
+    released = true;
+    await Promise.all([firstRecord, secondRecord]);
+    assert.equal(secondExec.calls.some((call) => call.args[0] === 'commit'), true);
+  } finally {
+    if (!released) releaseCommit();
+    await Promise.allSettled([firstRecord, secondRecord].filter(Boolean));
+  }
 });
 
 test('lock release preserves a replacement file owned by another token', async () => {
@@ -359,10 +386,12 @@ test('lock release preserves a replacement file owned by another token', async (
     return { code: 0, stdout: '' };
   });
 
-  await createHistory(exec, { lockHeartbeatMs: 1000 }).record(root, 'doc.md', 'user');
-
-  assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).token, 'replacement-owner');
-  rmSync(lockPath, { force: true });
+  try {
+    await createHistory(exec, { lockHeartbeatMs: 1000 }).record(root, 'doc.md', 'user');
+    assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).token, 'replacement-owner');
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
 });
 
 test('migration recovers a legacy per-root repo via its recorded core.worktree', { skip: !git && 'git unavailable' }, async () => {

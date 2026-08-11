@@ -21,7 +21,7 @@ test('identifyRoot gives path aliases one stable opaque identity', async () => {
 
   assert.deepEqual(relative, absolute);
   assert.deepEqual(trailing, absolute);
-  assert.equal(absolute.dir, realpathSync(dir));
+  assert.equal(absolute.dir, realpathSync.native(dir));
   assert.equal(absolute.name, 'space root');
   assert.match(absolute.key, /^r_[A-Za-z0-9_-]{22}$/);
   assert.equal(absolute.key.includes('space'), false);
@@ -74,7 +74,7 @@ test('identifyRoot preserves spaces and Unicode in the root summary', async () =
   mkdirSync(dir);
 
   const root = await identifyRoot(dir);
-  assert.equal(root.dir, realpathSync(dir));
+  assert.equal(root.dir, realpathSync.native(dir));
   assert.equal(root.name, '資料 café');
   assert.match(root.key, /^r_[A-Za-z0-9_-]{22}$/);
 });
