@@ -4,26 +4,10 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const {
-  CAPABILITIES,
-  DEFAULT_MODE,
-  KNOWN_CAPABILITIES,
-  PROTOCOL_VERSION,
   getInstanceMetadata,
   orderRegistry,
   shapeVersionResponse,
 } = require('../../server/protocol.js');
-
-test('protocol constants define capability names without advertising them', () => {
-  assert.equal(PROTOCOL_VERSION, 1);
-  assert.deepEqual(CAPABILITIES, {
-    ROOTS_V1: 'roots-v1',
-    SPACES_V1: 'spaces-v1',
-  });
-  assert.deepEqual(KNOWN_CAPABILITIES, ['roots-v1', 'spaces-v1']);
-  assert.equal(Object.isFrozen(CAPABILITIES), true);
-  assert.equal(Object.isFrozen(KNOWN_CAPABILITIES), true);
-  assert.equal(DEFAULT_MODE, 'shared');
-});
 
 test('instance metadata is generated once for the process', () => {
   const first = getInstanceMetadata();

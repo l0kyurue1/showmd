@@ -26,14 +26,17 @@ async function withServer(root, fn, extra = {}) {
   }
 }
 
-test('GET /api/version: single-root server reports core shape fields', async () => {
+test('GET /api/version reports stable identity, modes, capabilities, and launcher lifecycle', async () => {
   const root = tmp('showmd-version-single-');
+  const newRoot = tmp('showmd-version-addroot-new-');
   try {
     writeFileSync(path.join(root, 'a.md'), '# a\n');
+    writeFileSync(path.join(newRoot, 'x.md'), '# x\n');
     await withServer(root, async (base) => {
       const res = await fetch(`${base}/api/version`);
       assert.equal(res.status, 200);
       const body = await res.json();
+      assert.equal(body.version, require('../../package.json').version);
       assert.equal(body.launcher, false);
       assert.equal(body.protocol, 1);
       assert.match(body.instanceId, /^[0-9a-f-]{36}$/);
@@ -46,23 +49,13 @@ test('GET /api/version: single-root server reports core shape fields', async () 
       assert.equal(repeated.instanceId, body.instanceId);
       assert.equal(repeated.startedAt, body.startedAt);
     });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
 
-test('GET /api/version: createServer accepts an explicit dedicated mode', async () => {
-  await withServer(null, async (base) => {
-    const body = await (await fetch(`${base}/api/version`)).json();
-    assert.equal(body.mode, 'dedicated');
-    assert.deepEqual(body.capabilities, [CAPABILITIES.ROOTS_V1, CAPABILITIES.SPACES_V1]);
-  }, { mode: 'dedicated' });
-});
+    await withServer(null, async (base) => {
+      const body = await (await fetch(`${base}/api/version`)).json();
+      assert.equal(body.mode, 'dedicated');
+      assert.deepEqual(body.capabilities, [CAPABILITIES.ROOTS_V1, CAPABILITIES.SPACES_V1]);
+    }, { mode: 'dedicated' });
 
-test('GET /api/version: launcher stays true after POST /api/roots on a rootless boot', async () => {
-  const newRoot = tmp('showmd-version-addroot-new-');
-  try {
-    writeFileSync(path.join(newRoot, 'x.md'), '# x\n');
     await withServer(null, async (base) => {
       const before = await (await fetch(`${base}/api/version`)).json();
       assert.equal(before.launcher, true);
@@ -78,6 +71,7 @@ test('GET /api/version: launcher stays true after POST /api/roots on a rootless 
       assert.equal(after.launcher, true);
     });
   } finally {
+    rmSync(root, { recursive: true, force: true });
     rmSync(newRoot, { recursive: true, force: true });
   }
 });

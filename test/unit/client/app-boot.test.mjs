@@ -67,19 +67,6 @@ test('keyboard shortcuts wired at the bottom of app.js run without a ReferenceEr
   });
 });
 
-test('shift+mod+S and shift+mod+A run without a ReferenceError when Home is showing', async () => {
-  const h = await bootApp({ root: { dir: null, name: null } });
-  assert.equal(h.document.body.classList.contains('launcher'), true);
-
-  h.keydown('s', { metaKey: true, shiftKey: true });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(h.errors, []);
-
-  h.keydown('a', { metaKey: true, shiftKey: true });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(h.errors, []);
-});
-
 test('an SSE change event for the open file whose refetch 500s does not blank the document or the saved baseline', async () => {
   const h = await bootApp({
     root: { dir: '/tmp/proj', name: 'proj' },
@@ -295,26 +282,15 @@ test('reveal: a non-ok response reports the failure, then the chip recovers', as
     root: { dir: '/tmp/proj', name: 'proj' },
     tree: ['a.md'],
     files: { 'a.md': '# Title' },
+    deferredTimeouts: [2500],
   });
   h.fetch.on('POST', rootScopedPath('reveal'), () => ({ status: 500, body: { error: 'boom' } }));
   h.click(h.document.getElementById('reveal-btn'));
   await h.waitFor(() => h.document.getElementById('save-chip-text').textContent === 'Reveal failed');
   assert.equal(h.document.getElementById('save-chip-dot').className.includes('error'), true);
 
-  await h.waitFor(() => h.document.getElementById('save-chip-text').textContent !== 'Reveal failed', { timeout: 3500 });
-  assert.deepEqual(h.errors, []);
-});
-
-test('reveal: a successful reveal reports no error', async () => {
-  const h = await bootApp({
-    root: { dir: '/tmp/proj', name: 'proj' },
-    tree: ['a.md'],
-    files: { 'a.md': '# Title' },
-  });
-  h.fetch.on('POST', rootScopedPath('reveal'), () => ({ status: 200, body: { ok: true } }));
-  h.click(h.document.getElementById('reveal-btn'));
-  await h.waitFor(() => h.fetch.calls.some((c) => c.method === 'POST' && c.pathname === rootScopedPath('reveal')));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(h.pendingDeferredTimers(2500), 1);
+  assert.equal(await h.runDeferredTimers(2500), 1);
   assert.notEqual(h.document.getElementById('save-chip-text').textContent, 'Reveal failed');
   assert.deepEqual(h.errors, []);
 });

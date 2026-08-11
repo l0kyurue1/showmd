@@ -39,13 +39,6 @@ async function bootData(base) {
   return JSON.parse(match[1]);
 }
 
-test('createServer(null): boots with no root, no crash', async () => {
-  await withServer(null, async (base) => {
-    const res = await fetch(`${base}/api/roots`);
-    assert.equal(res.status, 200);
-  });
-});
-
 test('boot data: launcher mode reports {dir: null, launcher}', async () => {
   await withServer(null, async (base) => {
     const boot = await bootData(base);

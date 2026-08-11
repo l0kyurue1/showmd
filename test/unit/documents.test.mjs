@@ -132,101 +132,6 @@ test('diff and restore reject a rev that is not a bare object id', async () => {
 
 const git = await history.checkGitAvailable();
 
-// fakeGitExec is a scripted stand-in for the real git binary, wired through
-// history.js's own createHistory(gitExec) seam. It tracks just enough state
-// (a per-path commit chain plus a rev->content object map, mirroring how
-// `git commit --amend` leaves the pre-amend object reachable by hash even
-// once it drops out of `git log`) to drive commit/amend/log/show the way
-// server/history.js calls them — it does not hash or diff for real.
-function fakeGitExec() {
-  const repos = new Map();
-  let counter = 0;
-  const nextRev = () => (++counter).toString(16).padStart(40, '0');
-  const repoFor = (gitDir) => {
-    if (!repos.has(gitDir)) repos.set(gitDir, { head: null, objects: new Map(), history: new Map(), staged: new Map(), lastStaged: null });
-    return repos.get(gitDir);
-  };
-
-  return async function gitExec(prefixArgs, args, allowCodes = [], opts = {}) {
-    if (prefixArgs.length === 0 && args[0] === '--version') return { code: 0, stdout: 'git version 2.40.0 (fake)\n' };
-    if (prefixArgs[0] === '-C') return { code: 128, stdout: '' };
-    if (prefixArgs[0] !== '--git-dir') return { code: 0, stdout: '' };
-
-    const gitDir = prefixArgs[1];
-    const workTree = prefixArgs[3];
-    const repo = repoFor(gitDir);
-    const [cmd] = args;
-
-    if (cmd === 'init' || cmd === 'config' || cmd === 'hash-object' || cmd === 'update-index') return { code: 0, stdout: '' };
-
-    if (cmd === 'add') {
-      const relPath = args[args.length - 1];
-      const content = readFileSync(path.join(workTree, relPath), 'utf8');
-      repo.staged.set(relPath, content);
-      repo.lastStaged = relPath;
-      return { code: 0, stdout: '' };
-    }
-
-    if (cmd === 'diff' && args.includes('--cached')) {
-      const relPath = args[args.length - 1];
-      const chain = repo.history.get(relPath) || [];
-      const lastContent = chain.length ? repo.objects.get(chain[chain.length - 1].rev) : '';
-      const staged = repo.staged.get(relPath);
-      return { code: staged === lastContent ? 0 : 1, stdout: '' };
-    }
-
-    if (cmd === 'commit') {
-      const relPath = repo.lastStaged;
-      const chain = repo.history.get(relPath) || [];
-      const content = repo.staged.get(relPath);
-      const rev = nextRev();
-      const ts = Math.floor(Date.now() / 1000);
-      repo.objects.set(rev, content);
-      if (args[1] === '--amend') {
-        const subject = chain.length ? chain[chain.length - 1].subject : '';
-        if (chain.length) chain[chain.length - 1] = { rev, subject, ts };
-        else chain.push({ rev, subject, ts });
-      } else {
-        chain.push({ rev, subject: args[2], ts });
-      }
-      repo.history.set(relPath, chain);
-      repo.head = rev;
-      return { code: 0, stdout: '' };
-    }
-
-    if (cmd === 'rev-parse') return repo.head ? { code: 0, stdout: `${repo.head}\n` } : { code: 128, stdout: '' };
-
-    if (cmd === 'log' && args[1] === '-1') {
-      const relPath = args[args.length - 1];
-      const chain = repo.history.get(relPath) || [];
-      if (!chain.length) return { code: 0, stdout: '' };
-      const last = chain[chain.length - 1];
-      return { code: 0, stdout: `${last.rev}\x1f${last.subject}\x1f${last.ts}` };
-    }
-
-    if (cmd === 'log' && args.includes('--numstat')) {
-      const relPath = args[args.length - 1];
-      const chain = repo.history.get(relPath) || [];
-      const stdout = [...chain].reverse().map((e) => `\x00${e.rev}\x1f${e.ts}\x1f${e.subject}\n1\t0\t${relPath}\n`).join('');
-      return { code: 0, stdout };
-    }
-
-    if (cmd === 'show' && args.length === 2) {
-      const idx = args[1].indexOf(':');
-      const rev = args[1].slice(0, idx);
-      const content = repo.objects.get(rev);
-      return content === undefined ? { code: 128, stdout: '' } : { code: 0, stdout: content };
-    }
-
-    return { code: 128, stdout: '' };
-  };
-}
-
-function makeFakeHistoryStore(name) {
-  const dir = makeRoot(name);
-  return createDocumentStore([{ key: null, dir }], FILES_RELATIVE, history.createHistory(fakeGitExec()));
-}
-
 test('beginClose rejects new writes and external recording while drain awaits accepted history work', async () => {
   const dir = makeRoot('lifecycle-write');
   let releaseRecord;
@@ -288,37 +193,6 @@ test('an accepted restore may finish after close begins and is included in drain
   assert.deepEqual(await accepted, { ok: true });
   await drain;
   assert.equal(readFileSync(path.join(dir, 'hello.md'), 'utf8'), '# Restored\n');
-});
-
-test('a save becomes a timeline entry', async () => {
-  const store = makeFakeHistoryStore('fake-history-1');
-  await store.write('notes/deep.md', Buffer.from('# Deep\n\nfirst\n'));
-  const result = await store.timeline('notes/deep.md');
-  assert.equal(result.ok, true);
-  assert.equal(result.entries.length, 1);
-  assert.equal(result.entries[0].source, 'user');
-  assert.ok(result.entries[0].adds > 0);
-});
-
-test('restore puts an earlier version back on disk', async () => {
-  const store = makeFakeHistoryStore('fake-history-2');
-  const file = 'notes/deep.md';
-  await store.write(file, Buffer.from('# Deep\n\nfirst\n'));
-  const { entries } = await store.timeline(file);
-  const rev = entries[0].rev;
-  await store.write(file, Buffer.from('# Deep\n\nsecond\n'));
-  assert.equal((await store.read(file)).text, '# Deep\n\nsecond\n');
-
-  const result = await store.restore(file, rev, false);
-  assert.deepEqual(result, { ok: true });
-  assert.equal((await store.read(file)).text, '# Deep\n\nfirst\n');
-});
-
-test('timeline reports a document with no history as empty', async () => {
-  const store = makeFakeHistoryStore('fake-history-3');
-  const result = await store.timeline('hello.md');
-  assert.equal(result.ok, true);
-  assert.ok(Array.isArray(result.entries));
 });
 
 test('a save becomes a timeline entry (real git)', { skip: !git && 'git unavailable' }, async () => {

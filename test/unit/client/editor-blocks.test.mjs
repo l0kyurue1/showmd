@@ -4,9 +4,23 @@ import { JSDOM } from 'jsdom';
 import { EditorState } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>');
-global.window = dom.window;
-global.document = dom.window.document;
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true });
+for (const [name, value] of Object.entries({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  Window: dom.window.Window,
+  MutationObserver: dom.window.MutationObserver,
+  HTMLElement: dom.window.HTMLElement,
+  Node: dom.window.Node,
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+  cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+})) Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+dom.window.Range.prototype.getClientRects = () => [];
+dom.window.Range.prototype.getBoundingClientRect = () => ({
+  left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0,
+});
 
 const {
   blocksFacet,
@@ -15,14 +29,8 @@ const {
   scanMark,
   scanBlockMath,
   frontmatterEnd,
-  BulletWidget,
-  HRWidget,
-  LangWidget,
-  TaskWidget,
-  MdBlockWidget,
-  MathWidget,
-  MermaidWidget,
 } = await import('../../../client/editor-blocks.js');
+const { createEditor } = await import('../../../client/editor-src.js');
 
 const noActiveLine = () => false;
 const allActiveLine = () => true;
@@ -105,111 +113,101 @@ test('editBlockField builds Mermaid widgets without reading renderer theme detai
   assert.ok(state.field(editBlockField).size > 0);
 });
 
-test('BulletWidget.eq and toDOM render the glyph', () => {
-  const a = new BulletWidget('•');
-  const b = new BulletWidget('•');
-  const c = new BulletWidget('◦');
-  assert.equal(a.eq(b), true);
-  assert.equal(a.eq(c), false);
-  const el = a.toDOM();
-  assert.equal(el.className, 'cm-lp-bullet');
-  assert.equal(el.textContent, '•');
-});
-
-test('HRWidget always compares equal and renders its marker span', () => {
-  const el = new HRWidget().toDOM();
-  assert.equal(el.className, 'cm-lp-hr');
-  assert.equal(new HRWidget().eq(new HRWidget()), true);
-});
-
-test('LangWidget renders the fence language label', () => {
-  const el = new LangWidget('js').toDOM();
-  assert.equal(el.className, 'cm-lp-lang');
-  assert.equal(el.textContent, 'js');
-});
-
-test('TaskWidget.toDOM renders a checkbox reflecting checked state', () => {
-  const checked = new TaskWidget(true).toDOM({});
-  assert.equal(checked.type, 'checkbox');
-  assert.equal(checked.checked, true);
-  assert.match(checked.className, /\bcb\b/);
-  assert.match(checked.className, /\bcm-lp-task\b/);
-  const unchecked = new TaskWidget(false).toDOM({});
-  assert.equal(unchecked.checked, false);
-});
-
-test('MdBlockWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
+test('the public editor extension renders block widgets and refreshes theme-dependent output', async (t) => {
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
   const calls = [];
-  const blocks = {
-    renderBlockInto: async (target, request) => {
-      calls.push({ target, request });
-      target.innerHTML = `<p>rendered:${request.source}</p>`;
+  const doc = [
+    '- first',
+    '  - nested',
+    '- [x] done',
+    '',
+    '---',
+    '',
+    '```js',
+    'const x = 1;',
+    '```',
+    '',
+    '> quoted',
+    '',
+    'inline $x+y$',
+    '',
+    '$$',
+    'z=1',
+    '$$',
+    '',
+    '```mermaid',
+    'graph TD; A-->B',
+    '```',
+    '',
+    'tail',
+  ].join('\n');
+  const editor = createEditor(host, {
+    doc,
+    onChange() {},
+    onSave() {},
+    onToggleMode() {},
+    blocks: {
+      renderBlockInto(target, request) {
+        calls.push({ target, request });
+        target.textContent = `rendered:${request.kind}`;
+      },
     },
-  };
-  const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
-  const el = new MdBlockWidget('hello', '4px').toDOM(fakeView);
-  assert.equal(el.className, 'doc cm-lp-embed');
-  assert.equal(el.style.paddingBottom, '4px');
-  assert.equal(el.innerHTML, '<p>rendered:hello</p>');
-  assert.deepEqual(calls[0], { target: el, request: { kind: 'markdown', source: 'hello' } });
-});
-
-test('MathWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
-  const calls = [];
-  const blocks = {
-    renderBlockInto: async (target, request) => {
-      calls.push({ target, request });
-      target.innerHTML = '<span class="katex">x+y</span>';
-    },
-  };
-  const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
-  const el = new MathWidget('x+y', false, false).toDOM(fakeView);
-  assert.equal(el.tagName, 'SPAN');
-  assert.equal(el.className, 'cm-lp-math');
-  assert.equal(el.innerHTML, '<span class="katex">x+y</span>');
-  assert.deepEqual(calls[0], {
-    target: el,
-    request: { kind: 'math', source: 'x+y', display: false },
   });
-});
 
-test('MathWidget.toDOM retains the block host choice', () => {
-  const blocks = { renderBlockInto: async () => {} };
-  const fakeView = { state: { facet: () => blocks } };
-  const el = new MathWidget('x=1', true, true).toDOM(fakeView);
-  assert.equal(el.tagName, 'DIV');
-});
+  try {
+    editor.setEdit(true);
+    editor.jumpToLine(doc.split('\n').length);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 
-test('MermaidWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
-  const calls = [];
-  const blocks = {
-    renderBlockInto: async (target, request) => {
-      calls.push({ target, request });
-      target.innerHTML = '<svg>diagram</svg>';
-    },
-  };
-  const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
-  const refresh = {};
-  const el = new MermaidWidget('graph TD; a-->b', '8px', refresh).toDOM(fakeView);
-  assert.equal(el.className, 'cm-lp-mermaid');
-  assert.equal(el.style.paddingBottom, '8px');
-  assert.equal(el.innerHTML, '<svg>diagram</svg>');
-  assert.deepEqual(calls[0], {
-    target: el,
-    request: { kind: 'mermaid', source: 'graph TD; a-->b' },
-  });
-});
-
-test('MermaidWidget equality uses adapter refresh lifecycle, not renderer theme details', () => {
-  const refresh = {};
-  assert.equal(
-    new MermaidWidget('graph A', null, refresh).eq(new MermaidWidget('graph A', null, refresh)),
-    true,
-  );
-  assert.equal(
-    new MermaidWidget('graph A', null, refresh).eq(new MermaidWidget('graph A', null, {})),
-    false,
-  );
+    await t.test('nested bullets expose the expected public glyphs', () => {
+      assert.deepEqual([...host.querySelectorAll('.cm-lp-bullet')].map((el) => el.textContent), ['•', '◦']);
+    });
+    await t.test('horizontal rules expose their marker host', () => {
+      assert.ok(host.querySelector('.cm-lp-hr'));
+    });
+    await t.test('task markers expose a checked checkbox', () => {
+      const task = host.querySelector('input.cb.cm-lp-task');
+      assert.equal(task.type, 'checkbox');
+      assert.equal(task.checked, true);
+    });
+    await t.test('markdown blocks delegate source through a document host', () => {
+      const codeCall = calls.find(({ request }) => request.kind === 'markdown' && request.source.startsWith('```js'));
+      assert.ok(codeCall);
+      assert.match(codeCall.target.className, /\bdoc cm-lp-embed\b/);
+      assert.equal(codeCall.target.textContent, 'rendered:markdown');
+    });
+    await t.test('inline math delegates through a span host', () => {
+      const mathCall = calls.find(({ request }) => request.kind === 'math' && request.display === false);
+      assert.deepEqual(mathCall.request, { kind: 'math', source: 'x+y', display: false });
+      assert.equal(mathCall.target.tagName, 'SPAN');
+      assert.equal(mathCall.target.className, 'cm-lp-math');
+    });
+    await t.test('display math delegates through a block host', () => {
+      const mathCall = calls.find(({ request }) => request.kind === 'math' && request.display === true);
+      assert.deepEqual(mathCall.request, { kind: 'math', source: 'z=1', display: true });
+      assert.equal(mathCall.target.tagName, 'DIV');
+      assert.equal(mathCall.target.className, 'cm-lp-math');
+    });
+    await t.test('Mermaid delegates source through its placement host', () => {
+      const mermaidCall = calls.find(({ request }) => request.kind === 'mermaid');
+      assert.deepEqual(mermaidCall.request, { kind: 'mermaid', source: 'graph TD; A-->B' });
+      assert.equal(mermaidCall.target.className, 'cm-lp-mermaid');
+      assert.notEqual(mermaidCall.target.style.paddingBottom, '');
+    });
+    await t.test('refreshBlocks replaces and rerenders Mermaid output', () => {
+      const beforeCalls = calls.filter(({ request }) => request.kind === 'mermaid');
+      const beforeHost = beforeCalls.at(-1).target;
+      editor.refreshBlocks();
+      const afterCalls = calls.filter(({ request }) => request.kind === 'mermaid');
+      assert.equal(afterCalls.length, beforeCalls.length + 1);
+      assert.notStrictEqual(afterCalls.at(-1).target, beforeHost);
+      assert.equal(afterCalls.at(-1).target.textContent, 'rendered:mermaid');
+    });
+  } finally {
+    editor.destroy();
+    host.remove();
+  }
 });
 
 function collectGaps(state) {
@@ -230,36 +228,25 @@ function gapStateFor(doc) {
   });
 }
 
-test('blockGaps folds a heading-to-paragraph gap into a max() of the two margins, no blank line', () => {
-  const { lines } = collectGaps(gapStateFor('# Title\nSome text.'));
-  assert.deepEqual(lines, ['padding-bottom:max(var(--h1-mb), 0px)']);
-});
+test('blockGaps applies the margin contract across edge combinations and blank-line spacing', () => {
+  const cases = [
+    ['heading to paragraph', 'lines', '# Title\nSome text.', ['padding-bottom:max(var(--h1-mb), 0px)']],
+    ['heading to paragraph with blank line', 'lines', '# Title\n\nSome text.', [
+      'padding-bottom:max(0px, calc(max(var(--h1-mb), 0px) - var(--doc-lh)))',
+    ]],
+    ['same-edge code blocks', 'widgets', '```\ncode1\n```\n```\ncode2\n```', ['var(--block-m)']],
+    ['same-edge code blocks with blank line', 'widgets', '```\ncode1\n```\n\n```\ncode2\n```', [
+      'max(0px, calc(var(--block-m) - var(--doc-lh)))',
+    ]],
+    ['paragraph to blockquote', 'lines', 'para text\n> quoted', [
+      'padding-bottom:max(var(--p-mb), var(--block-m))',
+    ]],
+    ['paragraph to blockquote with blank line', 'lines', 'para text\n\n> quoted', [
+      'padding-bottom:max(0px, calc(max(var(--p-mb), var(--block-m)) - var(--doc-lh)))',
+    ]],
+  ];
 
-test('blockGaps subtracts a line height when a blank line already separates the blocks', () => {
-  const { lines } = collectGaps(gapStateFor('# Title\n\nSome text.'));
-  assert.deepEqual(lines, [
-    'padding-bottom:max(0px, calc(max(var(--h1-mb), 0px) - var(--doc-lh)))',
-  ]);
-});
-
-test('blockGaps uses the plain margin with no max() when adjacent blocks share the same edge value', () => {
-  const { widgets } = collectGaps(gapStateFor('```\ncode1\n```\n```\ncode2\n```'));
-  assert.deepEqual(widgets, ['var(--block-m)']);
-});
-
-test('blockGaps subtracts a line height for same-edge blocks separated by a blank line too', () => {
-  const { widgets } = collectGaps(gapStateFor('```\ncode1\n```\n\n```\ncode2\n```'));
-  assert.deepEqual(widgets, ['max(0px, calc(var(--block-m) - var(--doc-lh)))']);
-});
-
-test('blockGaps folds a paragraph-to-blockquote gap using max() of paragraph and block margins', () => {
-  const { lines } = collectGaps(gapStateFor('para text\n> quoted'));
-  assert.deepEqual(lines, ['padding-bottom:max(var(--p-mb), var(--block-m))']);
-});
-
-test('blockGaps applies the blank-line subtraction to a paragraph-to-blockquote gap', () => {
-  const { lines } = collectGaps(gapStateFor('para text\n\n> quoted'));
-  assert.deepEqual(lines, [
-    'padding-bottom:max(0px, calc(max(var(--p-mb), var(--block-m)) - var(--doc-lh)))',
-  ]);
+  for (const [name, decorationKind, doc, expected] of cases) {
+    assert.deepEqual(collectGaps(gapStateFor(doc))[decorationKind], expected, name);
+  }
 });
