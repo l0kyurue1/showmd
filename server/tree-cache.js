@@ -17,7 +17,12 @@ function createTreeCache() {
     const ts = now();
     if (!cache || cache.key !== key || ts - cache.builtAt >= ttlMs) {
       const { tree, roots } = await build();
-      cache = { key, tree, store: roots ? createDocumentStore(roots, true) : null, builtAt: ts };
+      cache = {
+        key,
+        tree,
+        store: roots ? createDocumentStore(roots, { addressing: 'keyed' }) : null,
+        builtAt: ts,
+      };
     }
     return { tree: cache.tree, store: cache.store };
   }
