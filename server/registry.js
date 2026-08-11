@@ -3,9 +3,7 @@ const http = require('node:http');
 const ports = require('./ports.js');
 const { orderRegistry } = require('./protocol.js');
 
-// raw, unranked: any JSON body with a string `version` counts as a live
-// showmd, so callers that need to identify a specific port (e.g. a stale
-// takeover check) are not filtered by protocol/mode compatibility here.
+// Raw probes identify showmd by version without protocol compatibility filtering.
 function probeVersion(port, { timeout = 300 } = {}) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/version', timeout }, (res) => {
@@ -25,9 +23,7 @@ function probeVersion(port, { timeout = 300 } = {}) {
   });
 }
 
-// the canonical Registry answer: every live server reads the same ports
-// directory and applies the same order (server/protocol.js's orderRegistry),
-// so any one of them gives every consumer the identical result.
+// Every server reads and orders the shared registry identically.
 async function discoverRegistry({ configuredPort } = {}) {
   const entries = await ports.list();
   const candidates = (await Promise.all(entries.map((e) => probeVersion(e.port)))).filter(Boolean);

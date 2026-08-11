@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import '../helpers/isolate-state.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -408,21 +409,22 @@ test('GET /api/recents: a cold entry surviving a non-ENOENT stat error is kept',
   const recentsHome = tmp('showmd-recents-keep-home-');
   const prevSettingsHome = process.env.SHOWMD_SETTINGS_HOME;
   process.env.SHOWMD_SETTINGS_HOME = recentsHome;
-  const notADir = tmp('showmd-recents-keep-file-');
-  writeFileSync(path.join(notADir, 'leaf.md'), '# a\n');
-  const impossiblePath = path.join(notADir, 'leaf.md', 'child.md');
+  const transientPath = path.join(recentsHome, 'temporarily-unreadable.md');
   try {
     const { settingsDir } = require('../../server/settings.js');
     mkdirSync(settingsDir(), { recursive: true });
-    writeFileSync(path.join(settingsDir(), 'recents.json'), JSON.stringify([{ path: impossiblePath, ts: Date.now() }]));
+    writeFileSync(path.join(settingsDir(), 'recents.json'), JSON.stringify([{ path: transientPath, ts: Date.now() }]));
+    const statFn = async (candidate) => {
+      if (candidate === transientPath) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return stat(candidate);
+    };
     await withServer(null, async (base) => {
       const recents = await (await fetch(`${base}/api/recents`)).json();
-      assert.deepEqual(recents.recents.map((r) => r.path), [impossiblePath]);
-    });
+      assert.deepEqual(recents.recents.map((r) => r.path), [transientPath]);
+    }, { statFn });
   } finally {
     if (prevSettingsHome === undefined) delete process.env.SHOWMD_SETTINGS_HOME;
     else process.env.SHOWMD_SETTINGS_HOME = prevSettingsHome;
     rmSync(recentsHome, { recursive: true, force: true });
-    rmSync(notADir, { recursive: true, force: true });
   }
 });

@@ -9,9 +9,7 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const { createServer } = require('../../server/server.js');
 
-// realpath, not just mkdtemp: windows hands back an 8.3 short name here
-// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
-// long filename does not match the short dir it was given
+// Canonicalize Windows temp paths before libuv watches them.
 function tmp(prefix) {
   return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }
@@ -227,9 +225,7 @@ test('GET /api/history-size: historySizeBytes reflects a real save, POST /api/pr
         body: JSON.stringify({ scope: 'root', rootKey }),
       });
       assert.equal(pruned.status, 200);
-      // scope=root now rebuilds the shared repo in place rather than deleting
-      // a dedicated directory, so the repo itself survives; only this root's
-      // own history is gone from it
+      // Root pruning preserves the shared repo while removing this root's history.
       assert.ok(existsSync(historyDirFor(root)));
 
       const after = await (await fetch(`${base}/api/history-size?root=${rootKey}`)).json();
@@ -366,9 +362,7 @@ test('POST /api/prune: invalid scope -> 400', async () => {
   }
 });
 
-// otherDir and historyDirFor(root) are now the same shared repo (one repo per
-// drive, not per root), so this only proves scope=all wipes the store itself;
-// test/unit/history.test.mjs's migration/prune tests cover cross-root sharing
+// This covers wiping the shared store; unit tests cover cross-root pruning.
 test('POST /api/prune: scope=all removes every shadow repo, not just the served root\'s', async () => {
   const root = tmp('showmd-prune-all-');
   const otherDir = historyDirFor(tmp('showmd-prune-all-other-'));
@@ -679,9 +673,7 @@ test('GET /: boot shell embeds escaped boot data as JSON before the module scrip
 });
 
 test('GET /: a "<" in boot data (from the root dir name) is escaped so it cannot close the script tag early', { skip: process.platform === 'win32' && 'windows forbids < and > in a file name, so this root cannot exist' }, async () => {
-  // the root's basename rides into boot.root.name verbatim; a name containing
-  // "<script>" is the same shape of hazard the original renderShell unit test
-  // covered, reached here through a real root instead of a hand-built object
+  // Exercise shell escaping through a real root name containing script markup.
   const root = tmp('showmd-boot-shell-<script>x-');
   try {
     await withServer(root, async (base) => {

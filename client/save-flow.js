@@ -44,20 +44,13 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
       onState('error', 'Not saved', 'load failed — nothing to save');
     },
 
-    // an SSE change to the open file arrived while the buffer is dirty: it
-    // can't be adopted yet without clobbering unsaved edits, so it waits here
-    // for the user's banner choice
+    // Stage external changes while dirty until the user chooses a resolution.
     stageExternal(text) {
       flow.pendingExternal = text;
     },
 
-    // 'reload' adopts the staged text as saved (caller still repaints the
-    // doc/editor with the returned text); 'keep' discards it and relies on
-    // the dirty->autosave invariant: the pending debounced save is what
-    // overwrites disk with the kept buffer. That invariant needs an attached
-    // baseline, so it does not apply while detached — but nothing can stage
-    // an external edit while detached either, so 'keep' is unreachable there.
-    // Either way clears the stage.
+    // Reload adopts staged text; keep lets the pending autosave overwrite it.
+    // External edits cannot be staged while detached.
     resolveExternal(action) {
       const text = flow.pendingExternal;
       if (action === 'reload' && text != null) flow.adopt(text);
@@ -65,19 +58,14 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
       return text;
     },
 
-    // a failed refetch of the open file must never be treated as content: 'ok'
-    // false short-circuits before the saved-copy comparison, so a transient
-    // 5xx can't blank the baseline or a dirty buffer's staged text
+    // Reject failed refetches before they can replace saved or staged text.
     decideExternalUpdate({ ok, text, dirty }) {
       if (!ok) return { action: 'error', text: null };
       if (text === flow.savedContent) return { action: 'ignore', text: null };
       return { action: dirty ? 'stage' : 'adopt', text };
     },
 
-    // beforeunload is unreliable and blocks the browser, so flushing rides the
-    // events that actually fire when a tab is hidden or torn down; flush() is
-    // still async and can be cut off mid-request, so this narrows the loss
-    // window, it doesn't close it
+    // Flush on hide/pagehide; async requests can still be interrupted.
     bindUnloadFlush(doc, win) {
       const onHide = () => (flow.dirty ? flow.flush() : undefined);
       doc.addEventListener('visibilitychange', () => {
@@ -98,9 +86,7 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
       flow.savedContent = text;
     },
 
-    // read() answers null while there is nothing to save from, and an unchanged
-    // buffer settles the chip without spending a request; a detached document
-    // (failed load) has no baseline to write back to, regardless of read()
+    // Detached or empty reads cannot save; unchanged buffers skip the request.
     async flush() {
       timers.clear(timer);
       if (!flow.attached) return;

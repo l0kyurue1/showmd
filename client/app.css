@@ -50,9 +50,7 @@
   --h2-size: 23px; --h2-weight: 650;
   --h3-size: 19px; --h3-weight: 650;
   --h456-size: 16.5px; --h456-weight: 650;
-  /* read mode applies these as margins; edit mode folds each adjacent pair into
-     one padding-top via CSS max(), because .cm-line margins break CodeMirror's
-     height measurement and padding does not collapse on its own */
+  /* Edit mode folds read margins into measurable padding. */
   --h1-mt: 40px; --h1-mb: 10px;
   --h2-mt: 32px; --h2-mb: 10px;
   --h3-mt: 26px; --h3-mb: 8px;
@@ -178,9 +176,7 @@ nav li.kbd-on:not(.on)::before {
   content: ''; position: absolute; inset: 0; left: calc(var(--indent) - 6px); z-index: -1;
   border-radius: 7px; background: var(--hover);
 }
-/* settings view clears .on so the sidebar reads as "navigated away", but this
-   tick still marks which file settings was opened from — weaker than .on's
-   full-row fill so it never reads as the active row */
+/* A subtle tick preserves the file context behind Settings. */
 nav li.last-visited::after {
   content: ''; position: absolute; left: 2px; top: 7px; bottom: 7px; width: 2px;
   border-radius: 1px; background: var(--muted); opacity: .4;
@@ -292,10 +288,7 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 }
 .root-switcher-recent-del:hover { opacity: 1; background: var(--card); color: var(--ink); }
 
-/* agent-config's agent picker reuses .root-switcher/.root-switcher-menu/
-   .root-switcher-recent-row wholesale (client/app.js); name + switch icon form
-   one button, and the row wrapper's solid background keeps scrolling tree rows
-   from showing through underneath it */
+/* Agent picker reuses root-switcher layout; the opaque row hides scrolling content. */
 .agent-switcher { margin-top: 8px; padding-bottom: 0px; }
 .root-switcher-row {
   width: 100%; display: flex; align-items: center; height: 30px;
@@ -325,9 +318,7 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 }
 .nav-footer-skills:hover, .nav-footer-agents:hover { background: var(--hover); color: var(--ink); }
 .nav-footer-skills.active, .nav-footer-agents.active { background: var(--selected); color: var(--ink); }
-/* below ~200px sidebar width, only the inactive button drops to icon-only
-   (never both — that only happens once one of them IS active, see
-   renderNavFooterNarrow in app.js) */
+/* Below ~200px, collapse only the inactive source button. */
 .nav-footer.narrow .nav-footer-skills:not(.active) .lbl,
 .nav-footer.narrow .nav-footer-agents:not(.active) .lbl { display: none; }
 .nav-footer-skills .tip, .nav-footer-agents .tip { top: auto; bottom: calc(100% + 8px); transform: translateX(calc(-50% + var(--shift))) translateY(4px); }
@@ -434,7 +425,7 @@ header .tools {
   border: 1px solid var(--line); border-radius: 8px; padding: 2px; flex-shrink: 0;
 }
 .nav-cluster { display: flex; gap: 2px; margin-right: 8px; flex-shrink: 0; transition: margin-left .3s var(--spring); }
-/* collapsed sidebar leaves the fixed logo over the header's left edge — shift the buttons clear of it */
+/* Keep header buttons clear of the fixed logo. */
 nav.collapsed ~ .col .nav-cluster { margin-left: 30px; }
 .icon-btn {
   width: 28px; height: 26px; flex-shrink: 0; border: none; background: none; border-radius: 6px;
@@ -448,10 +439,7 @@ nav.collapsed ~ .col .nav-cluster { margin-left: 30px; }
 .reveal-btn { opacity: 0; pointer-events: none; }
 body.has-file .reveal-btn { opacity: 1; pointer-events: auto; }
 
-/* header tips are the only ones that hang downward into main, and main is its
-   own stacking context (isolation, line 82). .icon-btn's hover transform makes
-   each button a stacking context too, trapping the tip's z-index inside it — so
-   the lift has to happen on the button, not the tip. */
+/* Lift header buttons because their transforms trap tooltip z-indexes. */
 header .icon-btn, header .chip { z-index: 21; }
 
 .tip {
@@ -888,30 +876,18 @@ dialog.confirm-dialog::backdrop { background: var(--overlay); }
 .confirm-dialog-actions button:hover { background: var(--hover); }
 .confirm-dialog-danger { color: var(--del); background: var(--del-bg); border-color: transparent; }
 
-/* the no-root screen: initRoot() shows this in place of #doc when the server
-   boots without a target. Its own padding replaces main's, since main's is
-   sized for a document, not a centered launcher column. header and .logo both
-   set their own display, which otherwise outranks the UA [hidden] rule —
-   same fix as .fname-symlink[hidden]/.hist-header[hidden] above. */
+/* The launcher replaces document padding; explicit display rules need [hidden]. */
 header[hidden] { display: none; }
 .logo[hidden] { display: none; }
 main:has(> .launcher-view:not([hidden])) { padding: 0; }
-/* main is a flex ITEM of .col (flex:1), which gives it a definite height even
-   though main itself isn't a flex container — height:100% (not flex:1, which
-   would do nothing here) is what lets this actually center in the full
-   viewport instead of shrinking to its own content */
+/* main's definite flex-item height lets the launcher fill and center vertically. */
 .launcher-view {
   height: 100%; display: flex; flex-direction: column; align-items: center;
   justify-content: center; padding: 0 24px;
 }
 .launcher-view[hidden] { display: none; }
 body.launcher { background: var(--side); }
-/* server-marked launcher boot (server.js's rootless GET / marker): shows the
-   launcher from first paint before any JS runs. init() strips this class
-   synchronously (replacing it with the equivalent nav.collapsed/hidden JS
-   state) before its first await, so it never overlaps with app.js's own
-   showLauncher()/hideLauncher() — those must animate nav via .collapsed's
-   transition (the ⌘\ mechanism), which a persistent display:none would kill */
+/* Show rootless boot before JS hands visibility to the animated launcher state. */
 body.launcher-boot nav, body.launcher-boot header, body.launcher-boot .logo { display: none; }
 body.launcher-boot #launcher-view[hidden] { display: flex; }
 .launcher-col { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 30px; }

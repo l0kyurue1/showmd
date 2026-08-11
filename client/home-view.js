@@ -56,9 +56,7 @@ export function createHomeView({
   let switcherNoticeTimer = null;
   let blockedDir = null;
 
-  // server-side store (server/recents.js) is the single source of truth: every
-  // client process is a potential different port, so localStorage (per-origin,
-  // thus per-port) can never persist these across Helper relaunches
+  // Recents are server-side because localStorage is isolated by port.
   async function apiRecents() {
     if (bootData.recents) {
       const entries = bootData.recents;
@@ -91,10 +89,7 @@ export function createHomeView({
     return { list: list.slice(0, RECENT_MAX), failed };
   }
 
-  // bootData.roots is the shared client-side registry cache app.js reads by
-  // key (findRootSummary) — merging every fresh server listing into it here
-  // is what lets the switcher jump straight to a root this tab never booted
-  // with (added in another tab, or just added in this one).
+  // Merge fresh roots into the client cache so other tabs' roots are addressable.
   async function liveRoots() {
     let roots = bootData.roots || [];
     try {
@@ -143,12 +138,8 @@ export function createHomeView({
     }
   }
 
-  // the single warning the plan calls for (not persisted, not the deferred
-  // live-dirty-report preflight): confirm once, then DELETE proceeds. Every
-  // open tab on this root learns of the removal from the root-removed SSE
-  // event, including this tab when it is the current root — this function
-  // itself never navigates or closes the switcher. A non-live row skips the
-  // dialog entirely and just drops the Recents entry.
+  // Live roots require confirmation; SSE tells every tab about the removal.
+  // Non-live rows only remove the Recents entry.
   async function forgetRecent(dir, liveRoot) {
     if (liveRoot) {
       const choice = await confirmDialog('forget-folder-dialog', {
@@ -214,18 +205,13 @@ export function createHomeView({
     renderNavFooterNarrow();
   }
 
-  // only the inactive button collapses to its icon, and only once the sidebar
-  // drops under ~200px — and only when one button IS active (Files view, neither
-  // active, keeps both labels: two icon+label pairs still fit, and losing both
-  // names at once reads as broken rather than compact)
+  // On narrow source views, collapse only the inactive footer button.
   function renderNavFooterNarrow() {
     const narrow = sidebar.getBoundingClientRect().width < 200;
     footerEl.classList.toggle('narrow', narrow && isSourceView(viewState.view));
   }
 
-  // addRoot mutates no dialog state; it just registers the target with
-  // RootManager and hands back the URL to land on (a document URL for a file
-  // target, the root's own URL for a folder).
+  // addRoot registers a target and returns its document or root URL.
   async function addRootAndNavigate(targetPath, notify = showSwitcherNotice, busyEl = null) {
     const openLabel = busyEl && busyEl.querySelector('span');
     const restoreLabel = openLabel && openLabel.textContent;
@@ -382,9 +368,7 @@ export function createHomeView({
 
   function showLauncher() {
     document.body.classList.add('launcher');
-    // re-entrant: boot opens the pane before this runs, and the switcher's Home
-    // row can fire while it is already showing — only the chrome capture and the
-    // state change are once-only, the recents list always redraws
+    // Re-entry preserves captured chrome but always redraws Recents.
     if (!isLauncherOpen(viewState.view)) {
       launcherSidebarWasCollapsed = sidebar.classList.contains('collapsed');
       sidebar.classList.add('collapsed');
@@ -421,9 +405,7 @@ export function createHomeView({
   document.addEventListener('keydown', (e) => {
     if (!launcherKeyboardActive()) return;
     const mod = e.metaKey || e.ctrlKey;
-    // Ctrl+1..5 is browser tab switching and cannot be preventDefault'd, so
-    // off-Mac the launcher takes the bare digits instead — nothing on this
-    // screen accepts text, so they are free
+    // Off-Mac uses bare digits because Ctrl+1..5 switches browser tabs.
     if ((isMac ? mod : !mod && !e.altKey) && /^[1-5]$/.test(e.key)) {
       const row = launcherRowEls().filter((r) => r.dataset.kind === 'recent')[Number(e.key) - 1];
       if (row) { e.preventDefault(); activateLauncherRow(row); }

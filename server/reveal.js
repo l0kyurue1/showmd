@@ -15,9 +15,7 @@ function revealErrorIsBenign(platform, err) {
   return platform === 'win32' && err.code === 1;
 }
 
-// trust boundary: the resolved path never touches a shell — execFile takes
-// an argv array, so nothing in `fullPath` can be interpreted as a shell
-// metacharacter
+// Trust boundary: pass resolved paths as argv, never through a shell.
 function defaultRevealFile(fullPath) {
   const { cmd, args } = buildRevealCommand(process.platform, fullPath);
   proc.tryRun(cmd, args).then(({ err }) => {

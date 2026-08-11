@@ -56,9 +56,7 @@ function compareText(a, b) {
   return a < b ? -1 : 1;
 }
 
-// the canonical Registry order: every consumer selects the first entry
-// instead of re-deriving this comparison (server/registry.js serves it at
-// GET /api/registry so a consumer never needs to run it locally)
+// Canonical registry order lets every consumer select the first entry.
 function orderRegistry(candidates, {
   configuredPort,
   protocol = PROTOCOL_VERSION,

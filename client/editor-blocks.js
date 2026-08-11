@@ -203,10 +203,8 @@ function hasBlankBetween(doc, from, to) {
   return false;
 }
 
-// read mode's adjacent margins collapse to max(); edit mode has no collapse, so
-// fold each pair into one gap. It hangs off the bottom of the earlier block, so
-// clicking the space under a heading lands on the heading, not the block below.
-// A blank line between the two already contributes its own height.
+// Fold adjacent read-mode margins into one measured edit-mode gap.
+// Attach it to the earlier block; blank source lines already add height.
 function blockGaps(tree, doc, fmEnd) {
   const gaps = new Map();
   let prev = null;

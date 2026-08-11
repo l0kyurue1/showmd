@@ -1,9 +1,7 @@
 'use strict';
 const { createDocumentStore } = require('./documents.js');
 
-// single-slot TTL cache for a tree built over a Document Store: skills.js and
-// agent-config.js each show one tree (for one root/agent) at a time, so a TTL
-// beats real invalidation logic for the rare case of an external edit mid-session.
+// One-tree TTL cache for rare external edits in Skills and agent config.
 function createTreeCache() {
   /** @type {{ key: string, tree: any, store: any, builtAt: number } | null} */
   let cache = null;

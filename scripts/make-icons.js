@@ -59,11 +59,7 @@ function faviconSvg({ fill = '#ffffff' } = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${BOX.w}" height="${BOX.w}" viewBox="0 ${-pad} ${BOX.w} ${BOX.w}"><path fill-rule="evenodd" d="M0 0H${BOX.w}V${BOX.h}H0Z ${markPath()}" fill="${fill}"/></svg>`;
 }
 
-// page geometry measured off /System/Library/CoreServices/CoreTypes.bundle
-// GenericDocumentIcon.icns at 1024, so our .md files line up with system ones.
-// macOS 11+ can composite a document icon from an asset catalog, but that needs
-// Xcode's actool — the launcher is built by osacompile on the user's machine, so
-// the folded corner is baked here instead.
+// Match the 1024px system document geometry; bake the fold to avoid Xcode's actool.
 const DOC = { x: 152, y: 16, w: 720, h: 944, r: 20, fold: 190 };
 const PAGE = '#ffffff';
 const FOLD = '#dedcd8';

@@ -20,13 +20,8 @@ function packageJsonHasDependency(packageJsonPath, name) {
   }
 }
 
-// ported from the `skills` CLI's agent registry (dist/cli.mjs) behind
-// `npx skills list -g`; order is npx's declaration order, which is also its
-// badge print order. `universal` agents read the canonical .agents/skills store
-// natively — no symlink needed, only a `detect` marker. `globalDir` is the
-// agent's own global dir, still scanned for skills placed outside the store.
-// `key`/`configLabel`/`instructionsFile`/`rulesDir`/`projectsDir` are only set
-// on the agents agent-config.js's browse view supports (Claude Code, Codex).
+// Mirrors `npx skills list -g` order. Universal agents read .agents/skills;
+// config browsing metadata exists only for supported agents.
 const AGENT_REGISTRY = [
   { name: "aider-desk", displayName: "AiderDesk", universal: false, detect: (home, cwd) => fs.existsSync(path.join(home, ".aider-desk")), globalDir: (home) => path.join(home, ".aider-desk/skills") },
   { name: "amp", displayName: "Amp", universal: true, detect: (home, cwd) => fs.existsSync(path.join(configHome(home), "amp")), globalDir: (home) => path.join(configHome(home), "agents/skills") },

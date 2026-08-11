@@ -73,9 +73,7 @@ export function createBlockRenderer({
     }
   }
 
-  // deliberately not folded into highlightCodeIn: that one waits on a lazy
-  // network fetch and only matches language-tagged fences, and a plain ``` block
-  // is just as worth copying
+  // Add copy buttons immediately, including for untagged code fences.
   function addCopyButtonsIn(rootEl) {
     for (const code of rootEl.querySelectorAll('pre > code:not(.language-mermaid)')) {
       const pre = code.parentElement;
@@ -102,6 +100,29 @@ export function createBlockRenderer({
     const { svg } = await mermaid.render('mmd-' + (mermaidSeq++), src);
     mermaidCache.set(key, svg);
     return svg;
+  }
+
+  function parseMermaidSVG(svg) {
+    const parsed = new window.DOMParser().parseFromString(svg, 'image/svg+xml');
+    const root = parsed.documentElement;
+    if (root.localName !== 'svg'
+      || root.namespaceURI !== 'http://www.w3.org/2000/svg'
+      || parsed.querySelector('parsererror')) {
+      throw new Error('Mermaid returned invalid SVG');
+    }
+    if (root.querySelector('script, iframe, object, embed')) {
+      throw new Error('Mermaid returned unsafe SVG');
+    }
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+      for (const attr of el.attributes) {
+        const value = attr.value.trim();
+        if (/^on/i.test(attr.name)
+          || (/^(?:href|xlink:href)$/i.test(attr.name) && /^javascript:/i.test(value))) {
+          throw new Error('Mermaid returned unsafe SVG');
+        }
+      }
+    }
+    return document.importNode(root, true);
   }
 
   function mermaidErrorEl(src, err) {
@@ -136,7 +157,7 @@ export function createBlockRenderer({
       for (const span of spans) {
         if (span.from > at) frag.appendChild(document.createTextNode(text.slice(at, span.from)));
         const el = document.createElement('span');
-        el.innerHTML = katex.renderToString(span.src, { displayMode: span.display, throwOnError: false });
+        katex.render(span.src, el, { displayMode: span.display, throwOnError: false });
         frag.appendChild(el);
         at = span.to;
       }
@@ -156,7 +177,7 @@ export function createBlockRenderer({
         const svg = await mermaidSVG(source);
         holder = document.createElement('div');
         holder.className = 'mermaid-diagram';
-        holder.innerHTML = svg;
+        holder.replaceChildren(parseMermaidSVG(svg));
       } catch (err) {
         reportError('showmd: mermaid render failed', err);
         holder = mermaidErrorEl(source, err);
@@ -229,11 +250,12 @@ export function createBlockRenderer({
       target.textContent = request.source;
       try {
         const katex = await vendor('katex');
-        const html = katex.renderToString(request.source, {
+        const rendered = document.createElement('span');
+        katex.render(request.source, rendered, {
           displayMode: Boolean(request.display),
           throwOnError: false,
         });
-        if (isCurrent()) target.innerHTML = html;
+        if (isCurrent()) target.replaceChildren(...rendered.childNodes);
       } catch (error) {
         if (isCurrent()) reportError('showmd: math render failed', error);
       }
@@ -241,7 +263,8 @@ export function createBlockRenderer({
       target.textContent = 'Rendering diagram…';
       try {
         const svg = await mermaidSVG(request.source);
-        if (isCurrent()) target.innerHTML = svg;
+        const rendered = parseMermaidSVG(svg);
+        if (isCurrent()) target.replaceChildren(rendered);
       } catch (error) {
         if (isCurrent()) {
           reportError('showmd: mermaid render failed', error);

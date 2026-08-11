@@ -16,11 +16,7 @@ const DEFAULTS = {
 
 const FONT_PRESETS = ['default', 'serif', 'mono'];
 
-// trust boundary: this value reaches spawn() in bin/cli.js — as an argument to
-// `cmd /c start` on Windows, as the executable itself elsewhere. Detected names
-// are plain app names ("Google Chrome") or Linux binaries ("google-chrome"), so
-// anything with a path separator, a shell metacharacter, or a control character
-// did not come from the picker and must not be run.
+// Browser settings cross a spawn boundary; accept only detected name syntax.
 const BROWSER_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._+-]*$/;
 
 const VALIDATORS = {
@@ -33,11 +29,8 @@ const VALIDATORS = {
   updateCheck: (v) => typeof v === 'boolean',
 };
 
-// where showmd keeps per-user state on each OS. `home` is a parameter because
-// install-app.js needs it as the literal shell $HOME, resolved by the launcher
-// scripts rather than by this process.
-// history.js deliberately opts out (it stays under ~/.local/share everywhere,
-// since the history store predates this convention)
+// Per-platform user state. `home` remains injectable for launcher generation.
+// History retains its older ~/.local/share location on every platform.
 function platformDataDir(platform = process.platform, home = os.homedir()) {
   if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'showmd');
   if (platform === 'win32') return path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'showmd');

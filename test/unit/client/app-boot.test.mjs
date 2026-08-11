@@ -109,9 +109,7 @@ test('loadFile against a 500 renders a placeholder but never adopts it as a save
   assert.deepEqual(h.errors, []);
 });
 
-// --- restored coverage for isMacPlatform, shortcutLabel, revealLabel, resolveTheme,
-// initialColorMode -- these lived in the deleted theme.test.mjs / shortcuts.test.mjs
-// and are folded into app.js now, exercised here through observable DOM behaviour.
+// --- platform labels and initial theme through observable DOM behavior ---
 
 test('on a Mac user agent, kbd hints keep their glyphs untouched', async () => {
   const h = await bootApp({ root: { dir: null, name: null }, userAgent: MAC_UA });
@@ -537,10 +535,7 @@ test('a rejected popstate flush restores the source URL and keeps its dirty buff
   assert.equal(h.document.title, 'notes.md');
 });
 
-// regression: applyRoute's root branch used to fall back to
-// lastFileBySource.files (keyed by view source, not by root) ahead of the
-// new tree's first file, so opening a different folder from an already-open
-// root re-requested the old root's relPath against the new root and 404'd.
+// Regression: a new root must not reuse the previous root's relative path.
 test('opening a different folder from an already-open root loads that folder\'s own file, never the previous root\'s', async () => {
   const OTHER_KEY = 'r_BBBBBBBBBBBBBBBBBBBBBB';
   const h = await bootApp({
@@ -628,9 +623,7 @@ test('a dirty editor buffer keeps its content when its own root is removed', asy
   await h.waitFor(() => h.document.body.classList.contains('launcher'));
 
   assert.equal(fakeEditor.getContent(), '# Title\n\nedited but unsaved', 'the dirty buffer must survive the root closing');
-  // the launcher overlay now covers the editor pane (view-state.js just toggles
-  // `hidden`), but the editor-host element and its fakeEditor instance are
-  // still in the DOM, unremoved — the buffer above proves nothing was wiped
+  // The launcher hides but does not remove the editor or its buffer.
   assert.equal(h.document.getElementById('editor-host').fakeEditor, fakeEditor);
   assert.deepEqual(h.errors, []);
 });
@@ -733,12 +726,8 @@ test('a root-promoted SSE event with no scope prefix (same-directory promotion) 
   assert.equal(h.window.location.pathname, `/r/${NEW_KEY}/a.md`);
 });
 
-// --- server-restarting SSE (every tab follows a restart) ---
-// hash preservation and the give-up-after-no-answer path are exercised at
-// the restart-follow.js unit level (test/unit/client/restart-follow.test.mjs)
-// with a small attempt budget — doing the give-up wait here would mean a real
-// 20s stall (app.js uses the production 100-attempt default), which the fast
-// unit loop cannot afford.
+// --- server-restarting SSE ---
+// restart-follow unit tests cover hashes and timeout without a 20s app wait.
 
 test('a server-restarting SSE event shows a transient state, then recovers in place once the same port answers', async () => {
   const h = await bootApp({

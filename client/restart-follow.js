@@ -4,10 +4,7 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// same-origin: a plain fetch can read the response, so success means "up".
-// cross-origin (port changed): the browser still blocks reading the response
-// body, but a resolved no-cors fetch (even an opaque one) still proves the
-// port is accepting connections — good enough for "is it back yet".
+// Same-origin polls verify status; opaque cross-origin responses verify reachability.
 export async function pollUntilUp(url, sameOrigin, attempts = 100) {
   for (let i = 0; i < attempts; i++) {
     await wait(200);
@@ -31,9 +28,7 @@ function currentPort() {
 
 let inFlight = null;
 
-// the tab that clicked Restart and every other tab (via the server's
-// broadcast) call this for the same restart; sharing one poll loop avoids
-// two overlapping fetch loops racing against the same replacement origin
+// Share one replacement poll across every tab handling the restart broadcast.
 export function followRestart(port, target, attempts = 100) {
   if (inFlight) return inFlight;
   const samePort = Number(port) === currentPort();

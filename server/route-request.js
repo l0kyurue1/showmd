@@ -26,17 +26,11 @@ function rootInfo(roots) {
   return { dir: roots[0].dir, name: path.basename(roots[0].dir), launchedFrom };
 }
 
-// resolves everything a route's `needs` asks for onto a context object handed
-// to the handler, so every route stops re-implementing body-parse and
-// store-lookup boilerplate. Returns { ok:false, error: <ERROR_STATUS code> }
-// on the first unmet need, leaving status/message mapping to the caller's
-// sendError (route-request.js has no opinion on HTTP status codes).
+// Resolve declared route needs; callers map unmet needs to HTTP errors.
 async function resolveContext(route, base) {
   const ctx = { ...base };
   const needs = route.needs || [];
-  // both 'body' and 'rawBody' read the same request stream, which yields
-  // nothing on a second pass — read it once and derive both from it, so a
-  // route that declares both can never hang or see an empty second read.
+  // Read the request stream once when a route needs body and rawBody.
   if (needs.includes('body') || needs.includes('rawBody')) {
     const raw = await readRawBody(base.req);
     if (needs.includes('rawBody')) ctx.rawBody = raw;

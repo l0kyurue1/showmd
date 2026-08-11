@@ -10,9 +10,7 @@ test('buildPickerAppletSource: embeds the request and result file paths verbatim
   assert.match(src, /set resFile to "\/tmp\/res"/);
 });
 
-// the marker file readFile is faked to already match PICKER_APP_VERSION, so
-// ensureApp()'s buildApp() short-circuits and these tests only exercise
-// pickViaApplet's request/poll/result flow, not the osacompile build itself
+// Fake a current marker so these tests cover polling, not osacompile.
 function makeFakes({ resultSequence = [] } = {}) {
   const calls = [];
   let resultCalls = 0;

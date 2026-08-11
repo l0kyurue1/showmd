@@ -19,10 +19,7 @@ writeFileSync(filePath, '# hi\n');
 // on this machine (the port setting now feeds the CLI's default, per settings.js)
 const settingsHome = path.join(workDir, 'settings-home');
 mkdirSync(settingsHome, { recursive: true });
-// updateCheck off: this spawns the real CLI, and the update check is the one
-// outbound call showmd can make — npm test needs no network. A pinned free
-// port keeps every test sharing this settings home off the real default port
-// (4321), which a real showmd instance on this machine may already hold
+// Disable network updates and pin tests away from a live default-port server.
 const defaultTestPort = await getFreePort();
 writeFileSync(path.join(settingsHome, 'settings.json'), JSON.stringify({ updateCheck: false, port: defaultTestPort }));
 const childEnv = { ...process.env, SHOWMD_SETTINGS_HOME: settingsHome };
@@ -90,10 +87,7 @@ function getFreePort() {
 
 test.after(() => rmSync(workDir, { recursive: true, force: true }));
 
-// a second invocation that asks for nothing dedicated is a capability client, not
-// another server. It discovers the live primary through the Registry, adds
-// its target via POST /api/roots,
-// prints/opens the returned URL on the FIRST server's port, and exits.
+// A second shared invocation adds its target to the registry primary and exits.
 test('two sequential invocations reuse one process: second reuses the first, both roots live', async () => {
   let a = null;
   let b = null;
@@ -131,9 +125,7 @@ test('two sequential invocations reuse one process: second reuses the first, bot
   }
 });
 
-// the inverse of the reuse test above: --new (and its --dedicated alias) opts
-// an invocation out of the Registry search, so it boots its own process and
-// announces mode 'dedicated', which keeps it out of every later reuse search
+// --new skips registry reuse and advertises a dedicated process.
 test('--new and --dedicated boot their own process instead of reusing the shared one', async () => {
   const spawned = [];
   const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-dedicated-home-')));
@@ -181,9 +173,7 @@ test('a stale showmd on the default port is replaced, not yielded to', async () 
     writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ updateCheck: false, port: pinnedPort }));
     const env = { ...process.env, SHOWMD_SETTINGS_HOME: home };
 
-    // stands in for the real failure: an older install still holding the
-    // default port, serving its outdated client to any tab pointed at it.
-    // Identifies as showmd via /api/version, so takeover never hits a stranger
+    // Model an outdated showmd on the default port; /api/version makes takeover safe.
     const stale = `require('node:http').createServer((q, s) => { s.writeHead(200, {'content-type':'application/json'}); s.end(JSON.stringify({version:'0.0.0-old', launcher:true})); }).listen(${pinnedPort}, '127.0.0.1', () => console.log('up'));`;
     squatter = spawn('node', ['-e', stale], { stdio: ['ignore', 'pipe', 'pipe'] });
     let squatterOut = '';
@@ -205,9 +195,7 @@ test('a stale showmd on the default port is replaced, not yielded to', async () 
   }
 });
 
-// same target twice: POST /api/roots dedupes to the already-open root
-// (root-manager.test.mjs/roots.test.mjs cover the dedupe itself), so the
-// second invocation's URL matches the first's exactly, not a new Scope
+// Reopening a target returns the existing root URL, not a new Scope.
 test('a second invocation of the same target dedupes to the already-open root', async () => {
   let a = null;
   let b = null;
@@ -234,10 +222,7 @@ test('a second invocation of the same target dedupes to the already-open root', 
   }
 });
 
-// concurrent cold start (CLI and concurrent start, step 7): both invocations
-// find no live primary at discovery time and race the bind; the loser gets
-// EADDRINUSE, re-probes, and hands its target to the winner instead of
-// falling back to an ephemeral, unreachable-by-the-other-tab process
+// Concurrent cold starts race the bind; the loser hands its target to the winner.
 test('two concurrent cold starts: exactly one primary survives, both targets are served', async () => {
   let a = null;
   let b = null;
@@ -342,9 +327,7 @@ test('install-skill: exits 0 and lands SKILL.md under a fake HOME', async () => 
 
 test('--launcher --no-open: boots with no root; boot data gives dir null', async () => {
   let p = null;
-  // a pinned free port + own settings home: the default port may already be
-  // held by a real, same-version showmd launcher (e.g. the installed app),
-  // in which case --launcher just opens that tab and never prints its banner
+  // Pin an isolated port so a live installed launcher cannot absorb the test.
   const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-launcher-home-')));
   try {
     const pinnedPort = await getFreePort();
@@ -362,10 +345,7 @@ test('--launcher --no-open: boots with no root; boot data gives dir null', async
   }
 });
 
-// Spec 3 regression: --launcher used to probe only its own configured port,
-// so a rooted shared server on a different port was invisible to it and got
-// a second, duplicate process. It now asks the Registry via discoverPrimary,
-// the same selection GET /api/registry serves.
+// Regression: launcher discovery must find a rooted server on another port.
 test('--launcher reuses an already-running rooted shared server on a different port', async () => {
   let a = null;
   let b = null;
@@ -456,9 +436,7 @@ test('bare `showmd` (no args) in a tmp dir still serves that dir', async () => {
     p = spawnCliArgs(['--no-open'], { cwd: cwdDir, env: childEnv });
     const info = await waitFor(() => extractUrl(p.state.stdout));
     const boot = await bootData(`http://127.0.0.1:${info.port}/`);
-    // realpath: the child's process.cwd() resolves symlinks (e.g. macOS's
-    // /tmp -> /private/tmp) the same way, so compare against that, not the
-    // pre-resolved tmpdir() path this test built cwdDir from
+    // Match the child's canonical cwd, including macOS /tmp symlinks.
     assert.deepEqual(boot.root, { dir: realpathSync(cwdDir), name: path.basename(cwdDir), launchedFrom: 'terminal' });
     console.log('criterion PASS: bare showmd serves cwd unchanged');
   } finally {
@@ -513,7 +491,9 @@ test('POST /api/shutdown: process exits cleanly and its registry entry is writte
   }
 });
 
-test('SIGTERM: process exits and removes its registry entry', async () => {
+test('SIGTERM: process exits and removes its registry entry', {
+  skip: process.platform === 'win32' && 'Windows child.kill terminates the process without delivering SIGTERM',
+}, async () => {
   const home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-sigterm-')));
   let p = null;
   try {

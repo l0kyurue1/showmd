@@ -230,12 +230,7 @@ test('root-scoped: tree honors a scope query param scoped to a subdirectory', as
   }
 });
 
-// Blueprint risk 1: rootScopedTree's ?scope= handling (server.js) and
-// route-context.js's decodeRouteValue must agree on one decode path. Neither
-// decodes beyond what URLSearchParams/searchParams.get() already did, so a
-// scope segment survives spaces, Unicode, '#', and a smuggled %2F literally —
-// this proves the server side of that contract with the same shapes
-// client/route.test.mjs proves for the client parser/formatter twin.
+// Scope queries decode exactly once, matching the client route contract.
 test('root-scoped: scope query survives spaces, Unicode, #, and a literal %2F segment unchanged', async () => {
   const root = tmp('showmd-scoped-scope-encoding-');
   try {
@@ -251,10 +246,7 @@ test('root-scoped: scope query survives spaces, Unicode, #, and a literal %2F se
       assert.deepEqual(space, ['a dir/x.md']);
       const unicode = await (await fetch(`${base}/api/roots/${key}/tree?scope=${encodeURIComponent('Ünïcode #')}`)).json();
       assert.deepEqual(unicode, ['Ünïcode #/y.md']);
-      // %2F here is a literal three-character segment name, not an encoded
-      // slash: decodeRouteValue never decodes a query value a second time, so
-      // this must resolve to the directory literally named "%2F", not smuggle
-      // an extra path segment.
+      // %2F stays a literal directory name; a second decode would smuggle a slash.
       const literalPercent = await (await fetch(`${base}/api/roots/${key}/tree?scope=${encodeURIComponent('%2F')}`)).json();
       assert.deepEqual(literalPercent, ['%2F/z.md']);
     });
@@ -263,9 +255,7 @@ test('root-scoped: scope query survives spaces, Unicode, #, and a literal %2F se
   }
 });
 
-// the folder a user opens can be one this process may not read (macOS grants
-// folder access per app, and an added path is not always covered). Two
-// things must survive that: the server, and the truth that it failed.
+// An unreadable added folder must report failure without taking down the server.
 test('root-scoped: an unreadable root added via POST /api/roots -> tree 500 unreadable_root, server stays up', {
   skip: process.platform === 'win32' ? 'chmod does not restrict access on windows' : process.getuid && process.getuid() === 0 ? 'chmod does not constrain root' : false,
 }, async () => {

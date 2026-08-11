@@ -11,9 +11,7 @@ const PROJECT = path.resolve(HERE, '..', '..');
 const PORT = 4402;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-// fake HOME: keeps this machine's real ~/.claude out of the discovered tree
-// realpath every temp root: windows hands back 8.3 short names here, and libuv
-// aborts a served process when a watch event's long filename does not match
+// Isolate user state and canonicalize Windows temp paths before watching them.
 const fakeHome = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-agents-home-')));
 mkdirSync(path.join(fakeHome, '.claude'), { recursive: true });
 writeFileSync(path.join(fakeHome, '.claude', 'CLAUDE.md'), '# fake claude instructions\n');

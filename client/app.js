@@ -17,9 +17,7 @@ function isMacPlatform(nav) {
   return nav.userAgentData?.platform === 'macOS' || /Mac/i.test(nav.userAgent || '');
 }
 
-// Handlers accept metaKey || ctrlKey everywhere, so only the printed hints are
-// platform-specific. Mac keeps the glyphs; everywhere else spells the modifiers
-// out, because ⇧/⌥ read as nothing to a Windows or Linux user.
+// Shortcuts accept Meta or Ctrl; only their printed hints are platform-specific.
 const SHORTCUT_GLYPHS = { '⌘': 'Ctrl', '⇧': 'Shift', '⌥': 'Alt', '⌃': 'Ctrl' };
 
 function shortcutLabel(label, mac) {
@@ -64,9 +62,7 @@ let rootInfo = null;
 // the parsed Route Context this tab is addressing: space/rootKey/scopePath/documentPath.
 // Undefined fields mean "not part of the current URL", matching route.js's contract.
 let currentRoute = { space: 'home', rootKey: undefined, scopePath: undefined, documentPath: undefined };
-// The Save Flow owns the address of the bytes currently in the editor. Route
-// transitions may update currentRoute before a pending flush settles, so a
-// save target must never be reconstructed from mutable navigation state.
+// Save targets belong to the buffer, not mutable navigation state.
 let saveAddress = null;
 let lastVisitedFile = null;
 
@@ -229,9 +225,7 @@ function findSkillForFile(file) {
 function layoutClampedChips(wrap, chipEls, maxRows) {
   wrap.replaceChildren(...chipEls);
   if (!chipEls.length) return;
-  // not laid out (e.g. panel/tab hidden): offsetTop reads 0 for every chip,
-  // which would falsely read as "fits, no overflow" — bail and let the next
-  // render, once visible, measure for real
+  // Hidden chips report offsetTop 0; wait for a visible render to measure.
   if (wrap.offsetParent === null) return;
   if (new Set(chipEls.map((c) => c.offsetTop)).size <= maxRows) return;
 
@@ -427,10 +421,7 @@ async function loadTree() {
   return null;
 }
 
-// SSE-driven refresh: a doc-mode server watching its own root fires file events
-// while the sidebar is showing the skills or agent-config view too, so the
-// refresh has to ask for whichever tree is currently on screen, not always
-// the plain file tree
+// Refresh whichever tree is visible when SSE reports a file change.
 async function refreshTree() {
   async function refreshFrom(fetcher) {
     let res;
@@ -479,9 +470,7 @@ function appendGlideList(items) {
 let nav = INITIAL_NAV;
 
 
-// agent-config view only: picks which agent's Instructions/Memories the tree
-// below is showing. Same markup as the folder switcher (switcherEl) so it needs
-// no CSS of its own — switcherEl still supplies the "Back to Home" row.
+// Agent config reuses the folder switcher markup and Back to Home row.
 const agentSwitcherEl = document.createElement('div');
 agentSwitcherEl.className = 'root-switcher agent-switcher';
 agentSwitcherEl.hidden = true;
@@ -567,9 +556,7 @@ function openAgentConfig(agentKey = 'claude') {
     : { space: 'agents', agentKey });
 }
 
-// every exit affordance is a destination, not a history move: the current
-// root if it is still open, else Home — never history.back(), so a tab
-// reached by a fresh URL (nothing behind it) still lands somewhere sane
+// Exit to the current root or Home; fresh tabs may have no browser history.
 function homeOrCurrentRoot() {
   return currentRoute.rootKey && findRootSummary(currentRoute.rootKey)
     ? { space: 'root', rootKey: currentRoute.rootKey }
@@ -619,9 +606,7 @@ function setSource(source) {
 
 const lastFileBySource = { files: null, skills: null, agents: null };
 
-// switching trees lands on the file you last had open in that tree, falling
-// back to a caller-supplied preference and then its first file — never on the
-// previous tree's file, which is not in this one
+// Restore each tree's last file, then a preferred or first file.
 function openDefaultFile(preferred) {
   const remembered = lastFileBySource[viewState.view.source];
   const file = [remembered, preferred, state.tree[0]].find((f) => f && state.tree.includes(f));
@@ -814,9 +799,7 @@ function prefixWithScope(scopePath, value) {
   return scopePath ? `${scopePath}/${value}` : value;
 }
 
-// carries no document refetch: the promoted root's directory already
-// contains everything the narrower root served, at the same relative paths,
-// so only rootKey/scopePath/documentPath and the address bar need rewriting
+// Root promotion rewrites route state without refetching the same document.
 async function applyRootPromotion({ newRoot, scope }) {
   const oldRootKey = currentRoute.rootKey;
   if (currentRoute.rootKey !== undefined) {
@@ -875,9 +858,7 @@ async function applyRootPromotion({ newRoot, scope }) {
   await loadTree();
 }
 
-// renders the recoverable "root no longer open" state a stale/foreign rootKey
-// resolves to (conflict #23's routeError.root_not_open); Home's action is the
-// launcher overlay reached at /home/.
+// Render stale root keys as a recoverable Home state.
 function renderRootNotOpen() {
   rootInfo = null;
   home.showLauncher();
@@ -1104,9 +1085,7 @@ function updateNavButtons() {
   fwdBtn.classList.toggle('disabled', navIdx >= navMax);
 }
 
-// applies a parsed Route Context to on-screen state — shared by navigateTo
-// (after a pushState) and popstate (after the browser already moved the
-// address bar), so both paths land on the same tree/file/Home behavior.
+// Apply parsed routes identically after pushState and popstate.
 async function applyRoute(route) {
   if (route && route.space === 'settings') {
     currentRoute = { space: 'settings', rootKey: route.rootKey };
@@ -1158,9 +1137,7 @@ async function applyRoute(route) {
   if (file) await loadFile(file);
 }
 
-// funnel for every URL-changing move: flushes a dirty save first so a rejected
-// flush leaves the address bar untouched (conflict #14), then pushes the
-// formatRouteContext URL and applies the new route together.
+// Flush before changing the URL so failed saves leave navigation untouched.
 async function navigateTo(route) {
   if (save.isDirty()) {
     await save.flush();
@@ -1232,9 +1209,7 @@ async function loadFile(file, preserveScroll) {
   if (!panelClosed()) historyView.load();
 }
 
-// history-view stays root-agnostic in its own module; this closure is where it
-// learns the current root, read fresh on every call since navigation can
-// change currentRoute.rootKey underneath an already-open panel.
+// Supply History with the current root at call time, not panel-open time.
 const rootScopedHistoryApi = {
   history: (path) => docs().history(path),
   diff: (path, rev, repo) => docs().diff(path, rev, repo),
@@ -1346,14 +1321,9 @@ function connectEvents() {
     // Root Space — two tabs on two roots must not cross-refresh each other
     if (data.rootKey !== undefined && data.rootKey !== currentRoute.rootKey) return;
     const { path, event } = data;
-    // the root itself is gone: no tree left to refresh. renderRootNotOpen
-    // only hides panes (view-state.js's commit just toggles `hidden`), so a
-    // dirty editor buffer keeps its content instead of being discarded.
+    // A removed root hides panes but preserves any dirty editor buffer.
     if (event === 'root-removed') { renderRootNotOpen(); return; }
-    // the ancestor root this tab was on got promoted to a wider parent: the
-    // same bytes are still served, just under the parent's rootKey with the
-    // old root's relative position as a scope prefix — rewrite in place
-    // rather than refetch, since nothing the user sees actually changed
+    // Root promotion changes addressing, not the document bytes.
     if (event === 'root-promoted') { await applyRootPromotion(data); return; }
     // content-only edits to the file already open can't reshape the tree;
     // anything else (new file, rename, delete) can
@@ -1404,9 +1374,7 @@ document.addEventListener('click', (e) => {
   navigate(a.dataset.file);
 });
 
-// clamps against the viewport AND the nearest overflow:hidden ancestor (the
-// collapsible sidebar `nav`) — a tooltip near nav's right edge was clipped by
-// that overflow:hidden even though it had plenty of room against the viewport
+// Clamp tooltips to both the viewport and the sidebar's clipping boundary.
 function positionTip(btn) {
   const tip = btn.querySelector('.tip');
   if (!tip) return;
@@ -1498,9 +1466,7 @@ restoreBtn.addEventListener('click', async () => {
   }
   historyView.backToCurrent();
 });
-// Getting Started shortcuts: work everywhere, launcher visible or not, so
-// they route through the same activateLauncherRow the launcher's own rows
-// use when it's showing, and fall back to the equivalent action otherwise.
+// Getting Started shortcuts share launcher row actions even when it is hidden.
 function openFileShortcut() {
   if (home.launcherKeyboardActive()) home.activateLauncherRow(document.getElementById('launcher-open-file'));
   else home.openTarget('open-file');
@@ -1611,9 +1577,7 @@ function resolveTheme(colorMode, systemDark) {
   return colorMode === 'system' ? (systemDark ? 'dark' : 'light') : colorMode;
 }
 
-// pre-settings builds only ever wrote 'light'/'dark' to localStorage, and
-// settings.json is now the source of truth: a legacy value is adopted once, and
-// only when the stored settings have no opinion of their own.
+// Adopt a legacy local theme once when settings have no saved color mode.
 function initialColorMode(settings, legacy) {
   const mode = settings.colorMode || 'system';
   if (legacy && mode === 'system') return { colorMode: legacy, persist: true };
@@ -1683,21 +1647,14 @@ async function init() {
   } else if (bootSpace) {
     currentRoute = { ...bootRoute };
   }
-  // server-marked launcher boot: skip the doomed tree request outright.
-  // allSettled either way, so a rejected initRoot/loadTree can never strand
-  // connectEvents() below unconnected
+  // Rootless boots skip tree loading; allSettled still reaches connectEvents.
   const launcherBoot = document.body.classList.contains('launcher');
-  // hands first-paint hiding off from the CSS-only body.launcher-boot marker
-  // (display:none, can't animate) to the same JS-driven state showLauncher()
-  // uses (nav.collapsed, header/.logo hidden) — synchronous and before the
-  // await below, so the swap never paints an intermediate frame
+  // Hand CSS-only boot hiding to the animated JS launcher state before awaits.
   if (launcherBoot) {
     sidebar.classList.add('collapsed');
     headerEl.hidden = true;
     appLogo.hidden = true;
-    // through the pane record, not launcherView.hidden directly: hideLauncher
-    // keys off the overlay, so a boot that skipped it would strand the header
-    // hidden on the way out (a boot straight into a space takes that path)
+    // Enter through View State so hideLauncher restores rootless boot chrome.
     viewState.dispatch({ type: 'launcher-open' });
     document.body.classList.remove('launcher-boot');
   }

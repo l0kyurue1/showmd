@@ -8,9 +8,7 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
-// realpath, not just mkdtemp: windows hands back an 8.3 short name here
-// (C:\Users\RUNNER~1\...) and libuv aborts the process when a watch event's
-// long filename does not match the short dir it was given
+// Canonicalize Windows temp paths before libuv watches them.
 function tmp(prefix) {
   return realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
 }

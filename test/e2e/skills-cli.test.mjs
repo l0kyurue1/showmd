@@ -11,10 +11,7 @@ const PROJECT = path.resolve(HERE, '..', '..');
 const PORT = 4401;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-// fake HOME: keeps this machine's real ~/.claude/skills etc. out of the
-// discovery result, and isolates the shadow-history repos this run creates
-// realpath every temp root: windows hands back 8.3 short names here, and libuv
-// aborts a served process when a watch event's long filename does not match
+// Isolate user state and canonicalize Windows temp paths before watching them.
 const fakeHome = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-home-')));
 const rootA = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootA-')));
 const rootB = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-skills-rootB-')));

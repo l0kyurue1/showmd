@@ -61,10 +61,7 @@ async function closedLocalPort() {
   return port;
 }
 
-// a real, separately-pidded process answering /api/version: entries in
-// ports.js's registry are named by pid, and ports.js sweeps any pid that
-// isn't alive, so a synthetic in-process fake would race the requesting
-// server's own self-announce sweep and vanish under the test
+// Use a live child PID so registry sweeping does not discard the fixture.
 function spawnFakeCandidate(body) {
   const script = `require('node:http').createServer((q, s) => {
     s.writeHead(200, {'content-type':'application/json'});

@@ -25,8 +25,10 @@ function writeSkill(skillsDir, name, body) {
 async function withSkillsHome(fn) {
   const home = tmp('showmd-skills-home-');
   const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
   const prevSettings = process.env.SHOWMD_SETTINGS_HOME;
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   process.env.SHOWMD_SETTINGS_HOME = path.join(home, 'settings');
   writeSkill(path.join(home, '.agents', 'skills'), 'demo', '# demo skill\n');
   const server = createServer(null);
@@ -38,6 +40,8 @@ async function withSkillsHome(fn) {
     await server.whenClosed();
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
     if (prevSettings === undefined) delete process.env.SHOWMD_SETTINGS_HOME;
     else process.env.SHOWMD_SETTINGS_HOME = prevSettings;
     rmSync(home, { recursive: true, force: true });
