@@ -85,6 +85,8 @@ instead of symlinks. Re-run it after an upgrade to refresh the skill.
 cover: a Raycast script command for macOS, and a `.md` right-click entry for
 Windows. Both need `showmd` on your `PATH`.
 
+<img src="contrib/raycast/metadata/0.raycast-showmd-all.png">
+
 ## Usage
 
 ### Serve markdown
