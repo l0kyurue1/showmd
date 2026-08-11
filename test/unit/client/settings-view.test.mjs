@@ -229,9 +229,13 @@ global.localStorage = dom.window.localStorage;
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function mount({ backLabel = () => '← Home', getRootKey = () => null, historySize = { historySizeBytes: null, historyTotalBytes: 0 } } = {}) {
+function mount({
+  backLabel = () => '← Home', getRootKey = () => null,
+  historySize = { historySizeBytes: null, historyTotalBytes: 0 },
+  settingsOpen = false, updateStates = [],
+} = {}) {
   document.body.innerHTML = '<div id="settings"></div><div id="cta"></div>';
-  const calls = { put: [], prune: [], theme: [], fontPreset: [], fontSize: [], back: 0, historySize: [] };
+  const calls = { put: [], prune: [], theme: [], fontPreset: [], fontSize: [], back: 0, historySize: [], update: [] };
   let payload = {
     colorMode: 'system', fontPreset: 'serif', fontSize: 16,
     openMode: 'read', updateCheck: true, port: 4321, browser: 'default',
@@ -244,6 +248,14 @@ function mount({ backLabel = () => '← Home', getRootKey = () => null, historyS
     putSettings: async (values) => { calls.put.push(values); return { ok: true }; },
     getHistorySize: async (rootKey) => { calls.historySize.push(rootKey); return { ok: true, json: async () => historySize }; },
     installApp: async () => ({ ok: true, json: async () => ({}) }),
+    startUpdate: async (token) => {
+      calls.update.push(token);
+      return { ok: true, json: async () => ({ state: 'updating', token: 'rotated-token' }) };
+    },
+    getUpdateState: async () => ({
+      ok: true,
+      json: async () => updateStates.shift() || { state: 'failure', manualCommand: 'npm i -g showmd-cli@latest' },
+    }),
     registerMarkdown: async () => ({ ok: true, json: async () => ({}) }),
     prune: async (scope) => { calls.prune.push(scope); return { ok: true }; },
     restart: async () => ({ ok: true }),
@@ -263,6 +275,7 @@ function mount({ backLabel = () => '← Home', getRootKey = () => null, historyS
     getRootKey,
     backLabel,
     onBack: () => { calls.back++; },
+    isSettingsOpen: () => settingsOpen,
   });
   const root = document.getElementById('settings');
   return {
@@ -418,7 +431,8 @@ test('renderCta paints a pending release and stays empty when there is none', ()
   ui.view.renderCta({ updateAvailable: true, updateChannel: 'brew', latestVersion: '9.9.9' });
   assert.equal(ui.cta.hidden, false);
   assert.match(ui.cta.textContent, /9\.9\.9/);
-  assert.equal(ui.cta.querySelector('code').textContent, 'brew upgrade showmd');
+  assert.equal(ui.cta.querySelector('code'), null);
+  assert.equal(ui.cta.querySelector('.update-cta-btn').textContent, 'Update');
 
   ui.view.renderCta({});
   assert.equal(ui.cta.hidden, true);
@@ -431,4 +445,25 @@ test('renderCta puts a markup-bearing version in as text, not as HTML', () => {
   ui.view.renderCta({ updateAvailable: true, updateChannel: 'brew', latestVersion: '<img src=x onerror=alert(1)>' });
   assert.equal(ui.cta.querySelector('img'), null);
   assert.match(ui.cta.querySelector('.update-cta-title').textContent, /<img src=x onerror=alert\(1\)>/);
+});
+
+test('Settings offers Update without dismissal; a failed automatic update offers Try again and the fixed fallback', async () => {
+  const ui = mount({
+    settingsOpen: true,
+    updateStates: [{ state: 'failure', manualCommand: 'npm i -g showmd-cli@latest' }],
+  });
+  localStorage.clear();
+  ui.setPayload({
+    updateAvailable: true, updateChannel: 'npm-global', latestVersion: '2.0.0', updateToken: 'boot-token',
+  });
+  await ui.view.open();
+  assert.equal(ui.cta.querySelector('.update-cta-dismiss'), null);
+  assert.equal(ui.cta.querySelector('.update-cta-btn').textContent, 'Update');
+
+  ui.cta.querySelector('.update-cta-btn').click();
+  assert.equal(ui.cta.querySelector('.update-cta-title').textContent, 'Updating…');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(ui.calls.update, ['boot-token']);
+  assert.equal(ui.cta.querySelector('.update-cta-btn').textContent, 'Try again');
+  assert.equal(ui.cta.querySelector('code').textContent, 'npm i -g showmd-cli@latest');
 });

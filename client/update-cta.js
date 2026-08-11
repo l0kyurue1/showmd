@@ -1,9 +1,25 @@
 const CHANNEL_COMMANDS = { brew: 'brew upgrade showmd', 'npm-global': 'npm i -g showmd-cli@latest' };
 
 // Version-keyed dismissal lets the CTA return for later releases.
-export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVersion } = {}) {
+export function buildUpdateCta(settings = {}, {
+  dismissedVersion, justUpdatedVersion, operation = null, allowDismiss = true,
+} = {}) {
   if (justUpdatedVersion) {
-    return { state: 'updated', title: `App updated to ${justUpdatedVersion}`, success: true, showDismiss: false };
+    return { state: 'updated', title: `Updated to ${justUpdatedVersion}`, success: true, showDismiss: false };
+  }
+
+  if (operation?.state === 'updating') {
+    return { state: 'updating', title: 'Updating…', showDismiss: false };
+  }
+  if (operation?.state === 'finishing') {
+    return { state: 'finishing', title: 'Finishing update…', showDismiss: false };
+  }
+  if (operation?.state === 'failure') {
+    return {
+      state: 'failure', title: 'Update couldn’t be completed.',
+      command: operation.manualCommand || null,
+      buttonLabel: 'Try again', buttonWeight: 'primary', action: 'update', showDismiss: false,
+    };
   }
 
   const appMissing = settings.appInstalled && settings.appStale && settings.appStaleReason === 'missing';
@@ -12,7 +28,7 @@ export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVer
       state: 'missing',
       title: 'The app points at a showmd that is no longer installed.',
       buttonLabel: 'Repair app', buttonWeight: 'primary',
-      showDismiss: false,
+      showDismiss: false, action: 'install-app',
     };
   }
 
@@ -26,10 +42,8 @@ export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVer
     return {
       state: 'both',
       title: `There is a new version ${version}`,
-      command: CHANNEL_COMMANDS[settings.updateChannel],
-      subline: 'Update the app after that.',
-      buttonLabel: 'Update app', buttonWeight: 'secondary',
-      showDismiss: true, dismissVersion: version,
+      buttonLabel: 'Update', buttonWeight: 'primary', action: 'update',
+      showDismiss: allowDismiss, dismissVersion: version,
     };
   }
 
@@ -39,8 +53,8 @@ export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVer
     return {
       state: 'showmd',
       title: `There is a new version ${version}`,
-      command: CHANNEL_COMMANDS[settings.updateChannel],
-      showDismiss: true, dismissVersion: version,
+      buttonLabel: 'Update', buttonWeight: 'primary', action: 'update',
+      showDismiss: allowDismiss, dismissVersion: version,
     };
   }
 
@@ -50,6 +64,6 @@ export function buildUpdateCta(settings = {}, { dismissedVersion, justUpdatedVer
     state: 'app',
     title: `There is a new version ${version}`,
     buttonLabel: 'Update app', buttonWeight: 'primary',
-    showDismiss: true, dismissVersion: version,
+    action: 'install-app', showDismiss: allowDismiss, dismissVersion: version,
   };
 }

@@ -6,7 +6,7 @@ const installers = require('./install-app.js');
 
 // appStatusFn/mdHandlerDefaultFn/effectiveSettingsPromise are the same
 // test/platform seams createServer already accepted for this route.
-async function getSettingsView({ platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath }) {
+async function getSettingsView({ platform, appStatusFn, mdHandlerDefaultFn, effectiveSettingsPromise, cliPath, updateToken }) {
   const detectMdHandlerDefault = mdHandlerDefaultFn
     || (() => settingsPlatform.detectMdHandlerDefault({ platform, bundleId: installers.BUNDLE_ID }));
   const [values, browsers, effective, mdHandlerDefault] = await Promise.all([
@@ -30,6 +30,7 @@ async function getSettingsView({ platform, appStatusFn, mdHandlerDefaultFn, effe
     showmdVersion: require('../package.json').version,
     mdHandlerDefault,
     updateChannel: installers.installChannel(cliPath || process.argv[1] || ''),
+    updateToken: updateToken || null,
   };
 }
 

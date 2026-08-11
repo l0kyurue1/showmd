@@ -317,6 +317,97 @@ test('POST /api/install-app: unsupported platform -> 501, no install attempted',
   }, { platform: 'freebsd' });
 });
 
+test('POST /api/update: boot token is required, rotates after use, and concurrent clicks run one allowlisted update', async () => {
+  let releaseInstall;
+  const calls = [];
+  await withInstallServer(async (base) => {
+    const settings = await (await fetch(`${base}/api/settings`)).json();
+    assert.match(settings.updateToken, /^[0-9a-f-]{36}$/);
+
+    const rejected = await fetch(`${base}/api/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'wrong' }),
+    });
+    assert.equal(rejected.status, 403);
+    assert.equal(calls.length, 0);
+
+    const first = await fetch(`${base}/api/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: settings.updateToken }),
+    });
+    assert.equal(first.status, 202);
+    const firstBody = await first.json();
+    assert.equal(firstBody.state, 'updating');
+    assert.notEqual(firstBody.token, settings.updateToken);
+
+    const duplicate = await fetch(`${base}/api/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: firstBody.token }),
+    });
+    assert.equal(duplicate.status, 200);
+    assert.equal((await duplicate.json()).state, 'updating');
+
+    releaseInstall();
+    assert.ok(await waitUntil(async () => (await (await fetch(`${base}/api/update`)).json()).state === 'updated'));
+    assert.equal(calls.length, 2, 'one install command plus one exact-version verification');
+  }, {
+    cliPath: '/global/node_modules/showmd-cli/bin/cli.js',
+    updateInfoFn: () => ({ updateAvailable: true, latestVersion: '2.0.0' }),
+    updateRunFn: async (command, args) => {
+      calls.push([command, args]);
+      if (args.includes('--version')) return { err: null, stdout: '2.0.0\n' };
+      await new Promise((resolve) => { releaseInstall = resolve; });
+      return { err: null, stdout: '' };
+    },
+    updateOnVerifiedFn: async () => {},
+  });
+});
+
+test('POST /api/update: failed installation keeps the current server usable and exposes the fixed manual fallback', async () => {
+  await withInstallServer(async (base) => {
+    const settings = await (await fetch(`${base}/api/settings`)).json();
+    const started = await fetch(`${base}/api/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: settings.updateToken }),
+    });
+    assert.equal(started.status, 202);
+    assert.ok(await waitUntil(async () => (await (await fetch(`${base}/api/update`)).json()).state === 'failure'));
+    const state = await (await fetch(`${base}/api/update`)).json();
+    assert.equal(state.manualCommand, 'npm i -g showmd-cli@latest');
+    assert.equal((await fetch(`${base}/api/settings`)).status, 200, 'the current runtime remains usable');
+  }, {
+    cliPath: '/global/node_modules/showmd-cli/bin/cli.js',
+    updateInfoFn: () => ({ updateAvailable: true, latestVersion: '2.0.0' }),
+    updateRunFn: async () => ({ err: new Error('permission denied'), stdout: '' }),
+  });
+});
+
+test('POST /api/update: verified npm update launches the installed CLI with a root-preserving handoff', async () => {
+  const launches = [];
+  const cliPath = '/global/node_modules/showmd-cli/bin/cli.js';
+  await withInstallServer(async (base) => {
+    const settings = await (await fetch(`${base}/api/settings`)).json();
+    const started = await fetch(`${base}/api/update`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: settings.updateToken }),
+    });
+    assert.equal(started.status, 202);
+    assert.ok(await waitUntil(() => launches.length === 1));
+
+    const [launch] = launches;
+    assert.equal(launch.command, process.execPath);
+    assert.equal(launch.args[0], cliPath, 'the replacement starts from the verified installed package');
+    assert.ok(launch.args.includes('--no-open'));
+    const snapshot = JSON.parse(readFileSync(launch.options.env.SHOWMD_RESTART_HANDOFF, 'utf8'));
+    assert.equal(snapshot.roots.length, 1);
+    assert.equal(snapshot.roots[0].dir.includes('showmd-install-'), true);
+  }, {
+    cliPath,
+    updateInfoFn: () => ({ updateAvailable: true, latestVersion: '2.0.0' }),
+    updateRunFn: async (_command, args) => ({ err: null, stdout: args.includes('--version') ? '2.0.0\n' : '' }),
+    launchDetachedFn: (command, args, options) => {
+      launches.push({ command, args, options });
+      return { unref() {} };
+    },
+    exitFn: () => {},
+  });
+});
+
 test('GET /api/history-size: includes historyTotalBytes summed across every shadow repo', async () => {
   // the shared repo now spans every root this test file has touched, so this
   // test needs a clean store to compare an exact total against
@@ -536,7 +627,7 @@ test('POST /api/restart: two concurrent requests only invoke restartFn once', as
 async function waitUntil(predicate, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (predicate()) return true;
+    if (await predicate()) return true;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;

@@ -104,6 +104,22 @@ test('putSettings sends a JSON body with the right headers', async () => {
   }
 });
 
+test('update API sends only the boot token and polls state without caching', async () => {
+  const f = stubFetch();
+  try {
+    await api.startUpdate('boot-token');
+    await api.getUpdateState();
+    assert.deepEqual(f.calls, [
+      ['/api/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'boot-token' }),
+      }],
+      ['/api/update', { cache: 'no-store' }],
+    ]);
+  } finally {
+    f.restore();
+  }
+});
+
 test('putRaw normalizes a failed save into a thrown error, matching the old inline put', async () => {
   const f = stubFetch({ ok: false, status: 500 });
   try {
