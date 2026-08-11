@@ -16,7 +16,8 @@ export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronS
   function renderDoc(text) {
     currentText = text;
     const { meta, body } = pipeline.parseFrontmatter(text);
-    doc.innerHTML = skillMetaHTML(meta) + pipeline.render(body);
+    blocks.renderDocumentInto(doc, body);
+    doc.insertAdjacentHTML('afterbegin', skillMetaHTML(meta));
     renderProperties(meta);
     enhanceDoc();
     refreshInfo(text);
@@ -39,7 +40,6 @@ export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronS
     doc.querySelectorAll(`input.${TASK_CLASS}[data-line]`).forEach((cb) => {
       cb.addEventListener('change', () => toggleTaskAt(+cb.dataset.line, cb.checked));
     });
-    blocks.enhance(doc);
     enhanceHeadings();
   }
 

@@ -266,9 +266,12 @@ export function createPipeline(markdownit) {
   let docId = null;
   function setDocId(id) { docId = id; }
 
+  let assetUrl = null;
+  function setAssetUrl(fn) { assetUrl = fn; }
+
   function resolveAssetSrc(src) {
     if (/^([a-z][a-z0-9+.-]*:)?\/\//i.test(src) || src.startsWith('data:') || src.startsWith('/')) return src;
-    if (!docId) return src;
+    if (!docId || !assetUrl) return src;
     const dir = docId.includes('/') ? docId.slice(0, docId.lastIndexOf('/')) : '';
     const parts = [];
     for (const part of (dir ? dir + '/' + src : src).split('/')) {
@@ -276,7 +279,7 @@ export function createPipeline(markdownit) {
       if (part === '..') parts.pop();
       else parts.push(part);
     }
-    return '/api/asset?path=' + encodeURIComponent(parts.join('/'));
+    return assetUrl(parts.join('/'));
   }
 
   const renderImage = md.renderer.rules.image || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
@@ -335,6 +338,7 @@ export function createPipeline(markdownit) {
     computeOutline,
     setTree,
     setDocId,
+    setAssetUrl,
     escapeHtml: (s) => md.utils.escapeHtml(s),
   };
 }

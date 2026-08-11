@@ -122,16 +122,26 @@ test('installed and healthy: shows the app version only, button reads Installed 
 
 test('a folder with no history offers nothing to prune', () => {
   applyDerivedValues({ historySizeBytes: null, historyTotalBytes: null });
-  assert.equal(rowByKey('prune').label, "This folder's history");
+  assert.equal(rowByKey('prune').label, "Selected folder's history");
   assert.equal(rowByKey('prune').disabled, true);
   assert.equal(rowByKey('pruneAll').label, 'All saved histories');
 });
 
 test('history sizes land in the prune labels', () => {
   applyDerivedValues({ historySizeBytes: 1536, historyTotalBytes: 5 * 1024 ** 2 });
-  assert.equal(rowByKey('prune').label, "This folder's history · 1.5 KB");
+  assert.equal(rowByKey('prune').label, "Selected folder's history · 1.5 KB");
   assert.equal(rowByKey('prune').disabled, false);
   assert.equal(rowByKey('pruneAll').label, 'All saved histories · 5.0 MB');
+});
+
+// historySizeBytes/historyTotalBytes are undefined (not null) until the
+// separate GET /api/history-size request resolves — a loading placeholder,
+// distinct from null's "no folder selected"
+test('history sizes not yet fetched show a loading placeholder, not "no folder"', () => {
+  applyDerivedValues({ historySizeBytes: undefined, historyTotalBytes: undefined });
+  assert.equal(rowByKey('prune').label, "Selected folder's history · …");
+  assert.equal(rowByKey('prune').disabled, true);
+  assert.equal(rowByKey('pruneAll').label, 'All saved histories · …');
 });
 
 test('the update row states the running version and, when on, whether it is current', () => {
@@ -221,9 +231,9 @@ global.localStorage = dom.window.localStorage;
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function mount() {
+function mount({ backLabel = () => '← Home', getRootKey = () => null, historySize = { historySizeBytes: null, historyTotalBytes: 0 } } = {}) {
   document.body.innerHTML = '<div id="settings"></div><div id="cta"></div>';
-  const calls = { put: [], prune: [], theme: [], fontPreset: [], fontSize: [], back: 0 };
+  const calls = { put: [], prune: [], theme: [], fontPreset: [], fontSize: [], back: 0, historySize: [] };
   let payload = {
     colorMode: 'system', fontPreset: 'serif', fontSize: 16,
     openMode: 'read', updateCheck: true, port: 4321, browser: 'default',
@@ -234,6 +244,7 @@ function mount() {
   const api = {
     getSettings: async () => ({ ok: true, json: async () => payload }),
     putSettings: async (values) => { calls.put.push(values); return { ok: true }; },
+    getHistorySize: async (rootKey) => { calls.historySize.push(rootKey); return { ok: true, json: async () => historySize }; },
     installApp: async () => ({ ok: true, json: async () => ({}) }),
     registerMarkdown: async () => ({ ok: true, json: async () => ({}) }),
     prune: async (scope) => { calls.prune.push(scope); return { ok: true }; },
@@ -251,7 +262,8 @@ function mount() {
     setTheme: (value, opts) => calls.theme.push([value, opts]),
     applyFontPreset: (value) => calls.fontPreset.push(value),
     applyFontSize: (value) => calls.fontSize.push(value),
-    returnsHome: () => false,
+    getRootKey,
+    backLabel,
     onBack: () => { calls.back++; },
   });
   const root = document.getElementById('settings');
@@ -266,7 +278,7 @@ test('open renders one row per visible setting, carrying the served values', asy
   const ui = mount();
   await ui.view.open();
 
-  assert.equal(ui.root.querySelector('.settings-back').textContent, '← Back');
+  assert.equal(ui.root.querySelector('.settings-back').textContent, '← Home');
   assert.deepEqual(
     [...ui.root.querySelectorAll('.settings-group-title')].map((el) => el.dataset.groupTitle),
     SETTINGS_GROUPS.map((g) => g.title),
@@ -277,6 +289,24 @@ test('open renders one row per visible setting, carrying the served values', asy
   // platform is linux, so the macOS-only Open With row never reaches the DOM
   assert.equal(ui.row('registerMarkdown'), null);
   assert.equal(ui.root.querySelectorAll('.settings-preview').length, 1);
+});
+
+test('open renders instantly with a loading placeholder, then patches in history sizes from GET /api/history-size', async () => {
+  const ui = mount({
+    getRootKey: () => 'r_abc',
+    historySize: { historySizeBytes: 2048, historyTotalBytes: 4096 },
+  });
+  await ui.view.open();
+
+  // the page itself renders before the size fetch resolves
+  assert.equal(ui.row('prune').querySelector('.settings-row-label').textContent, "Selected folder's history · …");
+  assert.equal(ui.row('pruneAll').querySelector('.settings-row-label').textContent, 'All saved histories · …');
+  assert.deepEqual(ui.calls.historySize, ['r_abc']);
+
+  await tick();
+
+  assert.equal(ui.row('prune').querySelector('.settings-row-label').textContent, "Selected folder's history · 2.0 KB");
+  assert.equal(ui.row('pruneAll').querySelector('.settings-row-label').textContent, 'All saved histories · 4.0 KB');
 });
 
 test('the About links leave for GitHub in a new tab, with no handle back to this origin', async () => {
@@ -370,6 +400,18 @@ test('the back link reports to the host instead of touching the view itself', as
   await ui.view.open();
   ui.root.querySelector('.settings-back').click();
   assert.equal(ui.calls.back, 1);
+});
+
+test('the back label names the open root when Settings is scoped to one', async () => {
+  const ui = mount({ backLabel: () => '← proj' });
+  await ui.view.open();
+  assert.equal(ui.root.querySelector('.settings-back').textContent, '← proj');
+});
+
+test('the back label falls back to Home when Settings carries no rootKey', async () => {
+  const ui = mount({ backLabel: () => '← Home' });
+  await ui.view.open();
+  assert.equal(ui.root.querySelector('.settings-back').textContent, '← Home');
 });
 
 test('renderCta paints a pending release and stays empty when there is none', () => {

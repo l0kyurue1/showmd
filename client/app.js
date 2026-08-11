@@ -1,14 +1,17 @@
 import { createBlockRenderer } from './blocks.js';
 import { createPipeline } from './pipeline.js';
-import { keyIntent, INITIAL_NAV, nextNav } from './navigation.js';
+import { breadcrumbForDocument, documentIds, keyIntent, metadataForDocument, INITIAL_NAV, nextNav } from './navigation.js';
+import { adaptAgentTree, adaptFilesTree, adaptSkillsTree } from './navigation-adapters.js';
 import { MODE_CYCLE, createViewState, isSettingsOpen, isLauncherOpen, isSourceView, isVersionOpen } from './view-state.js';
 import { startMarquee, stopMarquee, reducedMotion } from './marquee.js';
 import { createHistoryView } from './history-view.js';
 import { createDocView } from './doc-view.js';
 import { createSaveFlow } from './save-flow.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
+import { followRestart } from './restart-follow.js';
 import { createHomeView } from './home-view.js';
 import * as api from './api.js';
+import { parseRouteContext, formatRouteContext } from './route.js';
 
 function isMacPlatform(nav) {
   return nav.userAgentData?.platform === 'macOS' || /Mac/i.test(nav.userAgent || '');
@@ -48,19 +51,29 @@ if (!IS_MAC) {
 const pipeline = createPipeline(window.markdownit);
 const blocks = createBlockRenderer({ markdown: (src) => pipeline.render(src) });
 
-const state = { file: null, tree: [], skillsTree: null, agentTree: null };
+const state = { file: null, tree: [], navigation: { roots: [] }, navigationKind: null };
 // browser back/forward index into the files this tab has visited.
 // (pushState/back/forward are used below)
 let navIdx = 0;
 let navMax = 0;
-// doc-mode only: current root (null on a dedicated `showmd skills` server, where
-// GET /api/root 404s)
+let restoringPopstate = false;
+let popstateTransition = Promise.resolve();
+// doc-mode only: current root summary (null on a dedicated `showmd skills`
+// server, or before a Root Space route resolves)
 let rootInfo = null;
-let currentAgentKey = 'claude';
-// where exiting Settings / the skills / agent-config view lands. One slot,
-// because those three are mutually exclusive on screen.
-let returnTo = 'files';
+// the parsed Route Context this tab is addressing: space/rootKey/scopePath/documentPath.
+// Undefined fields mean "not part of the current URL", matching route.js's contract.
+let currentRoute = { space: 'home', rootKey: undefined, scopePath: undefined, documentPath: undefined };
+// The Save Flow owns the address of the bytes currently in the editor. Route
+// transitions may update currentRoute before a pending flush settles, so a
+// save target must never be reconstructed from mutable navigation state.
+let saveAddress = null;
 let lastVisitedFile = null;
+
+// the document verbs for whichever space the URL currently names
+function docs() {
+  return api.documentApi(currentRoute);
+}
 const sidebar = document.getElementById('sidebar');
 const sidebarBtn = document.getElementById('sidebar-btn');
 const sidebarTip = document.getElementById('sidebar-tip');
@@ -125,7 +138,10 @@ function setSaveState(kind, text, title) {
 }
 
 const save = createSaveFlow({
-  put: (text) => api.putRaw(state.file, text),
+  put: (text) => {
+    if (!saveAddress) throw new Error('no document address');
+    return api.documentApi(saveAddress.route).putRaw(saveAddress.file, text);
+  },
   read: () => (state.file ? currentContent() : null),
   onState: setSaveState,
 });
@@ -207,18 +223,7 @@ function refreshInfo(text) {
 }
 
 function findSkillForFile(file) {
-  if (!state.skillsTree || !file) return null;
-  for (const scope of state.skillsTree.scopes) {
-    for (const group of scope.groups) {
-      for (const skill of group.skills) {
-        if (skill.id === file || skill.files.some((f) => f.id === file)) return skill;
-      }
-    }
-    for (const skill of scope.skills) {
-      if (skill.id === file || skill.files.some((f) => f.id === file)) return skill;
-    }
-  }
-  return null;
+  return file ? metadataForDocument(state.navigation, file, 'skill') : null;
 }
 
 function layoutClampedChips(wrap, chipEls, maxRows) {
@@ -370,52 +375,47 @@ async function setMode(mode) {
   }
 }
 
-function currentFileFromLocation() {
-  const p = decodeURIComponent(location.pathname).replace(/^\//, '');
-  return p.endsWith('.md') ? p : null;
+// server-emitted routes for virtual documents: the client never turns a
+// Skills/Agents provider id back into a URL itself (plan URL contract).
+let documentHrefs = new Map();
+
+function collectDocumentHrefs(data) {
+  const map = new Map();
+  const add = (node) => { if (node && node.id && node.href) map.set(node.id, node.href); };
+  for (const scope of data.scopes || []) {
+    for (const skill of [...(scope.skills || []), ...(scope.groups || []).flatMap((g) => g.skills || [])]) {
+      add(skill);
+      for (const file of skill.files || []) add(file);
+    }
+  }
+  for (const group of data.groups || []) {
+    for (const file of group.files || []) add(file);
+    for (const project of group.projects || []) {
+      add(project.memoryDoc);
+      for (const file of project.files || []) add(file);
+    }
+  }
+  return map;
 }
 
 function applyTreeData(data) {
-  if (Array.isArray(data)) {
-    state.tree = data;
-    state.skillsTree = null;
-    state.agentTree = null;
-  } else if (data.groups) {
-    state.agentTree = data;
-    state.skillsTree = null;
-    state.tree = flattenAgentConfigTree(data);
-  } else {
-    state.skillsTree = data;
-    state.agentTree = null;
-    state.tree = flattenSkillsTree(data);
-    if (!state.file) document.title = 'SKILLS.md';
-  }
+  const kind = Array.isArray(data) ? 'files' : (data.groups ? 'agents' : 'skills');
+  const input = Array.isArray(data) ? { tree: data } : data;
+  documentHrefs = kind === 'files' ? new Map() : collectDocumentHrefs(input);
+  const adapter = { files: adaptFilesTree, agents: adaptAgentTree, skills: adaptSkillsTree }[kind];
+  if (kind !== state.navigationKind) nav = nextNav(nav, { type: 'reset' });
+  state.navigationKind = kind;
+  state.navigation = adapter(input);
+  state.tree = documentIds(state.navigation);
+  if (kind === 'skills' && !state.file) document.title = 'SKILLS.md';
   pipeline.setTree(state.tree);
   renderSidebar();
-}
-
-// macOS gates Documents, Desktop and Downloads per app. The grant is per item:
-// confirming a folder in the app's own open panel records it (com.apple.macl)
-// and it covers that folder's whole subtree, so a blocked root recovers with
-// one pick — the launcher's Open Folder button re-opens the panel already
-// inside it. Only paths that never went through the panel (CLI arg, recents,
-// a hash route) can land here. Terminal launches read as the terminal's own
-// identity, which the app's panel cannot grant, so those still go to Privacy.
-function rootFailureText(failure, root) {
-  if (failure === 'blocked') {
-    return root.launchedFrom === 'app'
-      ? `macOS has not granted ShowMD access to ${root.name} yet. Choose Open Folder below and confirm ${root.name} to allow it.`
-      : `Not allowed to read ${root.name}. Grant your terminal access to that folder, then try again.`;
-  }
-  if (failure === 'unreadable') return `Could not read ${root.name}.`;
-  if (failure) return `Could not open ${root.name}.`;
-  return `No markdown files in ${root.name}.`;
 }
 
 // returns why it could not list, so a folder the server is not allowed to read
 // stops arriving as an empty one
 async function loadTree() {
-  const res = await api.tree();
+  const res = await docs().tree({ scope: currentRoute.scopePath });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     if (body.error !== 'unreadable_root') return 'failed';
@@ -445,38 +445,8 @@ async function refreshTree() {
     }
     applyTreeData(await res.json());
   }
-  if (viewState.view.source === 'agents') return refreshFrom(() => api.treeAgents(currentAgentKey));
-  if (viewState.view.source === 'skills') return refreshFrom(() => api.treeSkills());
+  if (currentRoute.space === 'skills' || currentRoute.space === 'agents') return refreshFrom(() => docs().tree());
   await loadTree();
-}
-
-function flattenSkillsTree(data) {
-  const out = [];
-  for (const scope of data.scopes) {
-    for (const group of scope.groups) {
-      for (const skill of group.skills) {
-        out.push(skill.id);
-        for (const f of skill.files) out.push(f.id);
-      }
-    }
-    for (const skill of scope.skills) {
-      out.push(skill.id);
-      for (const f of skill.files) out.push(f.id);
-    }
-  }
-  return out;
-}
-
-function flattenAgentConfigTree(data) {
-  const out = [];
-  for (const group of data.groups) {
-    if (group.files) for (const f of group.files) out.push(f.id);
-    if (group.projects) for (const proj of group.projects) {
-      if (proj.memoryDoc) out.push(proj.memoryDoc.id);
-      for (const f of proj.files) out.push(f.id);
-    }
-  }
-  return out;
 }
 
 fname.addEventListener('mouseenter', () => startMarquee(fname, fnameTrack));
@@ -573,51 +543,72 @@ const home = createHomeView({
   launcherBrowseAgentConfigBtn: document.getElementById('launcher-browse-agent-config'),
   launcherSettingsBtn: document.getElementById('launcher-settings'),
   viewState,
-  getRootInfo: () => rootInfo, getReturnTo: () => returnTo, setReturnTo: (v) => { returnTo = v; },
+  getRootInfo: () => rootInfo,
+  getBackLabel: () => (currentRoute.rootKey && rootInfo && rootInfo.name ? rootInfo.name : 'Home'),
+  getTreeLength: () => state.tree.length,
   getPanelOpen: () => !panelClosed(), setPanel,
-  enterSkillsView, enterAgentConfigView, enterSettingsView,
+  openSkills, openAgentConfig, openSettings,
+  navigateTo,
 });
 
 sidebar.append(home.switcherEl, searchEl, agentSwitcherEl, navBody, updateCtaEl, footerEl);
 
+// Skills and Agents are Spaces: entering one is a navigation, so a reload or a
+// shared URL lands on the same catalog, and Back leaves it.
+function openSkills() {
+  return navigateTo(currentRoute.rootKey
+    ? { space: 'skills', selection: 'root', rootKey: currentRoute.rootKey }
+    : { space: 'skills', selection: 'global' });
+}
+
+function openAgentConfig(agentKey = 'claude') {
+  return navigateTo(currentRoute.rootKey
+    ? { space: 'agents', agentKey, rootKey: currentRoute.rootKey }
+    : { space: 'agents', agentKey });
+}
+
+// every exit affordance is a destination, not a history move: the current
+// root if it is still open, else Home — never history.back(), so a tab
+// reached by a fresh URL (nothing behind it) still lands somewhere sane
+function homeOrCurrentRoot() {
+  return currentRoute.rootKey && findRootSummary(currentRoute.rootKey)
+    ? { space: 'root', rootKey: currentRoute.rootKey }
+    : { space: 'home' };
+}
+
+function leaveSpace() {
+  return navigateTo(homeOrCurrentRoot());
+}
+
 async function enterSkillsView() {
   if (isSettingsOpen(viewState.view)) exitSettingsView();
+  home.hideLauncher();
   navBody.replaceChildren();
   const loading = document.createElement('div');
   loading.className = 'nav-empty';
   loading.textContent = 'Loading skills…';
   navBody.appendChild(loading);
   try {
-    const res = await api.treeSkills();
+    const res = await docs().tree();
+    if (!res.ok) throw new Error('skills tree failed');
     applyTreeData(await res.json());
     setSource('skills');
     searchInput.placeholder = 'Search skills…';
   } catch {
     loading.textContent = 'Could not load skills.';
-    return;
+    return false;
   }
   home.renderSwitcher();
-  return openDefaultFile();
+  return true;
 }
 
 // leaves the skills/agent-config tree without landing anywhere: the caller is
 // about to put its own screen on top
-async function leaveSourceView() {
+function leaveSourceView() {
   closeAgentSwitcherMenu();
   setSource('files');
   searchInput.placeholder = 'Search files';
   home.renderSwitcher();
-  if (!(rootInfo && rootInfo.dir)) return;
-  await loadTree();
-  openDefaultFile();
-}
-
-// the "Back to …" exit: leaves the tree and lands where returnTo says
-async function exitSourceView() {
-  const goHome = returnTo === 'home' || !(rootInfo && rootInfo.dir);
-  returnTo = 'files';
-  await leaveSourceView();
-  if (goHome) home.showLauncher();
 }
 
 const AGENT_CONFIG_DISPLAY_NAMES = { claude: 'Claude', codex: 'Codex' };
@@ -646,14 +637,13 @@ function renderAgentSwitcherMenu(agents) {
     row.className = 'root-switcher-recent-row agent-switcher-row';
     row.textContent = a.displayName;
     row.disabled = !a.detected;
-    if (a.key === currentAgentKey) row.classList.add('on');
+    if (a.key === currentRoute.agentKey) row.classList.add('on');
     if (!a.detected) { row.title = `${a.displayName} not detected on this machine`; row.classList.add('dim'); }
     row.addEventListener('click', () => {
       closeAgentSwitcherMenu();
-      if (a.key === currentAgentKey) return;
-      currentAgentKey = a.key;
-      nav = nextNav(nav, { type: 'reset-agent-seed' });
-      enterAgentConfigView();
+      if (a.key === currentRoute.agentKey) return;
+      nav = nextNav(nav, { type: 'reset' });
+      openAgentConfig(a.key);
     });
     agentSwitcherMenu.appendChild(row);
   }
@@ -674,38 +664,41 @@ agentSwitcherBtn.addEventListener('click', () => {
   if (agentSwitcherMenu.hidden) openAgentSwitcherMenu(); else closeAgentSwitcherMenu();
 });
 
+// returns the file agent config wants open when the route named no document:
+// Instructions is what someone opening agent config almost always came for.
 async function enterAgentConfigView() {
   if (isSettingsOpen(viewState.view)) exitSettingsView();
-  let opened = false;
+  home.hideLauncher();
+  const agentKey = currentRoute.agentKey;
   navBody.replaceChildren();
   const loading = document.createElement('div');
   loading.className = 'nav-empty';
   loading.textContent = 'Loading agent config…';
   navBody.appendChild(loading);
+  let preferred = null;
   try {
-    const res = await api.treeAgents(currentAgentKey);
+    const res = await docs().tree();
+    if (!res.ok) throw new Error('agent tree failed');
     const data = await res.json();
     applyTreeData(data);
     setSource('agents');
     searchInput.placeholder = 'Search agent config…';
-    agentSwitcherNameEl.textContent = data.displayName || AGENT_CONFIG_DISPLAY_NAMES[currentAgentKey] || currentAgentKey;
+    agentSwitcherNameEl.textContent = data.displayName || AGENT_CONFIG_DISPLAY_NAMES[agentKey] || agentKey;
     renderAgentSwitcherMenu(data.agents || []);
-    // Instructions is the entry point when nothing is remembered: it is the
-    // file someone opening agent config almost always came for
     const instructions = data.groups.find((g) => g.name === 'Instructions');
     const firstFile = instructions && instructions.files && instructions.files[0];
-    opened = openDefaultFile(firstFile && firstFile.id);
+    preferred = firstFile ? firstFile.id : null;
   } catch {
     loading.textContent = 'Could not load agent config.';
-    return;
+    return false;
   }
   home.renderSwitcher();
-  return opened;
+  return preferred;
 }
 
 async function fetchSettings() {
   try {
-    const res = await api.getSettings();
+    const res = await api.getSettings(currentRoute.rootKey);
     if (!res.ok) {
       setSaveState('error', 'Settings unavailable', 'could not load settings — showing defaults');
       return {};
@@ -734,13 +727,19 @@ const settingsView = createSettingsView({
   setTheme,
   applyFontPreset,
   applyFontSize,
-  returnsHome: () => returnTo === 'home',
-  onBack: () => exitSettingsView(true),
+  getRootKey: () => currentRoute.rootKey,
+  onSelectRoot: (key) => navigateTo(key ? { space: 'settings', rootKey: key } : { space: 'settings' }),
+  backLabel: () => {
+    const root = currentRoute.rootKey ? findRootSummary(currentRoute.rootKey) : null;
+    return root ? `← ${root.name}` : '← Home';
+  },
+  onBack: () => leaveSettings(),
 });
 
 async function enterSettingsView() {
-  if (isSourceView(viewState.view)) await leaveSourceView();
-  if (isLauncherOpen(viewState.view)) { returnTo = 'home'; home.hideLauncher(); }
+  if (isSourceView(viewState.view)) leaveSourceView();
+  if (isLauncherOpen(viewState.view)) home.hideLauncher();
+  if (isSettingsOpen(viewState.view)) { await settingsView.open(); return; }
   viewState.dispatch({ type: 'settings-open' });
   lastVisitedFile = state.file;
   stopMarquee(fname);
@@ -750,30 +749,37 @@ async function enterSettingsView() {
   await settingsView.open();
 }
 
-function exitSettingsView(goHome) {
+function exitSettingsView() {
   viewState.dispatch({ type: 'settings-close' });
   lastVisitedFile = null;
   if (state.file) setFnameForFile(state.file);
   else { stopMarquee(fname); fnameTrack.textContent = ''; document.title = 'showmd'; }
   renderSidebar();
-  const returnHome = goHome && returnTo === 'home';
-  returnTo = 'files';
-  if (returnHome) home.showLauncher();
+}
+
+function openSettings() {
+  return navigateTo(currentRoute.rootKey
+    ? { space: 'settings', rootKey: currentRoute.rootKey }
+    : { space: 'settings' });
+}
+
+function leaveSettings() {
+  return navigateTo(homeOrCurrentRoot());
 }
 
 settingsFooterBtn.addEventListener('click', () => {
-  if (isSettingsOpen(viewState.view)) exitSettingsView(true); else enterSettingsView();
+  if (isSettingsOpen(viewState.view)) leaveSettings(); else openSettings();
 });
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !isSettingsOpen(viewState.view)) return;
   if (settingsView.menuOpen() || !home.switcherMenu.hidden) return;
   if (/^(input|textarea|select)$/i.test(e.target.tagName)) return;
-  exitSettingsView(true);
+  leaveSettings();
 });
 
 home.switcherBtn.addEventListener('click', () => {
-  if (isSourceView(viewState.view)) { exitSourceView(); return; }
+  if (isSourceView(viewState.view)) { leaveSpace(); return; }
   if (home.switcherMenu.hidden) home.openSwitcherMenu(); else home.closeSwitcherMenu();
 });
 for (const btn of [home.switcherOpenFolderBtn, home.switcherOpenFileBtn]) {
@@ -781,36 +787,107 @@ for (const btn of [home.switcherOpenFolderBtn, home.switcherOpenFileBtn]) {
 }
 home.switcherHomeBtn.addEventListener('click', async () => {
   home.closeSwitcherMenu();
-  if (isSourceView(viewState.view)) await leaveSourceView();
-  if (isSettingsOpen(viewState.view)) exitSettingsView();
-  home.showLauncher();
+  await navigateTo({ space: 'home' });
+});
+appLogo.addEventListener('click', () => navigateTo({ space: 'home' }));
+appLogo.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  navigateTo({ space: 'home' });
 });
 skillsFooterBtn.addEventListener('click', () => {
-  if (viewState.view.source === 'skills') { exitSourceView(); return; }
-  returnTo = 'files';
-  enterSkillsView();
+  if (currentRoute.space === 'skills') { leaveSpace(); return; }
+  openSkills();
 });
 agentsFooterBtn.addEventListener('click', () => {
-  if (viewState.view.source === 'agents') { exitSourceView(); return; }
-  returnTo = 'files';
-  enterAgentConfigView();
+  if (currentRoute.space === 'agents') { leaveSpace(); return; }
+  openAgentConfig();
 });
 
 
-async function initRoot() {
-  if (bootData.root) {
-    rootInfo = bootData.root;
-  } else {
-    try {
-      const res = await api.root();
-      if (!res.ok) return; // dedicated `showmd skills` server: no switcher, no footer
-      rootInfo = await res.json();
-    } catch {
+function findRootSummary(rootKey) {
+  return (bootData.roots || []).find((r) => r.key === rootKey) || null;
+}
+
+function prefixWithScope(scopePath, value) {
+  if (value === undefined) return scopePath || undefined;
+  return scopePath ? `${scopePath}/${value}` : value;
+}
+
+// carries no document refetch: the promoted root's directory already
+// contains everything the narrower root served, at the same relative paths,
+// so only rootKey/scopePath/documentPath and the address bar need rewriting
+async function applyRootPromotion({ newRoot, scope }) {
+  const oldRootKey = currentRoute.rootKey;
+  if (currentRoute.rootKey !== undefined) {
+    bootData.roots = (bootData.roots || []).filter((r) => r.key !== currentRoute.rootKey);
+  }
+  if (!findRootSummary(newRoot.key)) bootData.roots = [...(bootData.roots || []), newRoot];
+  rootInfo = newRoot;
+
+  if (currentRoute.space !== 'root') {
+    currentRoute = currentRoute.space === 'settings'
+      ? { space: 'settings', rootKey: newRoot.key }
+      : { ...currentRoute, rootKey: newRoot.key };
+    if (saveAddress && saveAddress.route.rootKey === oldRootKey) {
+      saveAddress = { ...saveAddress, route: { ...saveAddress.route, rootKey: newRoot.key } };
+    }
+    history.replaceState({ idx: navIdx }, '', formatRouteContext(currentRoute));
+    home.renderSwitcher();
+    if (save.isDirty()) await save.flush();
+    if (currentRoute.space === 'settings') {
+      await settingsView.open();
       return;
     }
+    if (currentRoute.space === 'skills' || currentRoute.space === 'agents') {
+      const openFile = state.file;
+      const entered = await (currentRoute.space === 'skills' ? enterSkillsView() : enterAgentConfigView());
+      if (entered === false) return;
+      if (openFile && state.tree.includes(openFile)) {
+        state.file = openFile;
+        saveAddress = { route: { ...currentRoute }, file: openFile };
+        pipeline.setDocId(openFile);
+        pipeline.setAssetUrl(docs().assetUrl);
+        renderSidebar();
+      } else {
+        openDefaultFile(typeof entered === 'string' ? entered : undefined);
+      }
+    }
+    return;
   }
-  if (rootInfo.dir == null) {
-    if (bootData.view === 'agents') { home.launcherBrowseAgentConfig(); return; }
+  currentRoute = {
+    ...currentRoute,
+    rootKey: newRoot.key,
+    scopePath: prefixWithScope(scope.scopePath, currentRoute.scopePath),
+    documentPath: prefixWithScope(scope.scopePath, currentRoute.documentPath),
+  };
+  if (state.file) {
+    state.file = prefixWithScope(scope.scopePath, state.file);
+    lastFileBySource.files = state.file;
+    saveAddress = { route: { ...currentRoute }, file: state.file };
+    pipeline.setDocId(state.file);
+    pipeline.setAssetUrl(docs().assetUrl);
+    setFnameForFile(state.file);
+  }
+  history.replaceState({ idx: navIdx }, '', formatRouteContext(currentRoute));
+  home.renderSwitcher();
+  if (save.isDirty()) await save.flush();
+  await loadTree();
+}
+
+// renders the recoverable "root no longer open" state a stale/foreign rootKey
+// resolves to (conflict #23's routeError.root_not_open); Home's action is the
+// launcher overlay reached at /home/.
+function renderRootNotOpen() {
+  rootInfo = null;
+  home.showLauncher();
+  home.showLauncherNotice('This root is no longer open.', { sticky: true });
+}
+
+async function initRoot() {
+  rootInfo = currentRoute.rootKey ? findRootSummary(currentRoute.rootKey) : null;
+  if (!rootInfo || rootInfo.dir == null) {
+    if (bootData.routeError && bootData.routeError.kind === 'root_not_open') { renderRootNotOpen(); return; }
     home.showLauncher();
     return;
   }
@@ -818,40 +895,6 @@ async function initRoot() {
   footerEl.hidden = false;
   home.renderSwitcher();
   if (bootSettings) settingsView.renderCta(bootSettings);
-}
-
-// SSE root-changed: the server already swapped roots and started watching the
-// new one — this only catches the client up (Recent, switcher, tree, the
-// initial doc), mirroring init()'s own "pick the first file" selection. A
-// `doc` field means a single .md file was picked (its parent dir became root,
-// same as `showmd file.md`) — open that file instead of the default first one.
-async function handleRootChanged(newRoot, doc) {
-  rootInfo = newRoot;
-  returnTo = 'files';
-  setSource('files');
-  searchInput.placeholder = 'Search files';
-  home.closeSwitcherMenu();
-  home.renderSwitcher();
-  state.file = null;
-  const failure = await loadTree();
-  // the tree still on screen belongs to the root we just left. A root we could
-  // not read has no tree, and keeping the old one makes its files look
-  // openable — they resolve against the new root and come back "not found"
-  if (failure) applyTreeData([]);
-  home.setBlockedDir(failure === 'blocked' ? newRoot.dir : null);
-  const file = failure ? null : doc || state.tree[0];
-  // the launcher is deliberately still up here: hiding it before the tree is
-  // known makes a failed pick collapse and re-expand the sidebar for nothing.
-  // Nothing to open is a dead end with no way back, so say why and stay put
-  if (!file) {
-    home.showLauncher();
-    home.showLauncherNotice(rootFailureText(failure, newRoot), { sticky: true });
-    return;
-  }
-  home.hideLauncher();
-  history.replaceState({ idx: navIdx }, '', '/');
-  await loadFile(file);
-  if (isSettingsOpen(viewState.view)) await settingsView.open();
 }
 
 function applyQuery(q) {
@@ -1020,7 +1063,7 @@ function paintRows(rows) {
 }
 
 function renderSidebar() {
-  nav = nextNav(nav, { type: 'sync-rows' }, { state, hideFile: isSettingsOpen(viewState.view) });
+  nav = nextNav(nav, { type: 'sync-rows' }, { model: state.navigation, file: state.file, hideFile: isSettingsOpen(viewState.view) });
   navBody.replaceChildren();
   if (nav.query && nav.rows.length === 0) return renderNoMatches();
   paintRows(nav.rows);
@@ -1029,38 +1072,96 @@ function renderSidebar() {
   if (selectedEl) selectedEl.classList.add('kbd-on');
 }
 
+function canGoBack() { return navIdx > 0; }
+
 function updateNavButtons() {
   backBtn.classList.toggle('disabled', navIdx <= 0);
   fwdBtn.classList.toggle('disabled', navIdx >= navMax);
 }
 
-function navigate(file) {
-  navIdx += 1;
-  navMax = navIdx;
-  history.pushState({ idx: navIdx }, '', '/' + file.split('/').map(encodeURIComponent).join('/'));
-  updateNavButtons();
-  loadFile(file);
+// applies a parsed Route Context to on-screen state — shared by navigateTo
+// (after a pushState) and popstate (after the browser already moved the
+// address bar), so both paths land on the same tree/file/Home behavior.
+async function applyRoute(route) {
+  if (route && route.space === 'settings') {
+    currentRoute = { space: 'settings', rootKey: route.rootKey };
+    await enterSettingsView();
+    return;
+  }
+  if (isSettingsOpen(viewState.view)) exitSettingsView();
+  if (!route || route.space === 'home') {
+    currentRoute = { space: 'home', rootKey: undefined, scopePath: undefined, documentPath: undefined };
+    rootInfo = null;
+    home.showLauncher();
+    return;
+  }
+  if (route.space === 'skills' || route.space === 'agents') {
+    const sameSpace = route.space === currentRoute.space
+      && route.selection === currentRoute.selection
+      && route.agentKey === currentRoute.agentKey
+      && route.rootKey === currentRoute.rootKey
+      && route.contextKey === currentRoute.contextKey;
+    currentRoute = { ...route };
+    const entered = sameSpace ? null : await (route.space === 'skills' ? enterSkillsView() : enterAgentConfigView());
+    if (entered === false) return;
+    const file = route.documentRoute !== undefined ? route.documentRoute : undefined;
+    if (file) await loadFile(file);
+    else if (!sameSpace) openDefaultFile(typeof entered === 'string' ? entered : undefined);
+    return;
+  }
+  const leftSpace = isSourceView(viewState.view);
+  if (leftSpace) leaveSourceView();
+  if (route.space !== 'root') return;
+  // reopening the same folder yields the same deterministic rootKey, so a
+  // missing rootInfo (launcher / root-not-open state) must count as a switch
+  const switchedRoot = route.rootKey !== currentRoute.rootKey || !rootInfo;
+  const scopeChanged = route.scopePath !== currentRoute.scopePath;
+  currentRoute = { space: 'root', rootKey: route.rootKey, scopePath: route.scopePath, documentPath: route.documentPath };
+  if (switchedRoot) {
+    rootInfo = findRootSummary(route.rootKey);
+    if (!rootInfo || rootInfo.dir == null) { renderRootNotOpen(); return; }
+    home.hideLauncher();
+    home.switcherEl.hidden = false;
+    footerEl.hidden = false;
+    home.renderSwitcher();
+  }
+  if (switchedRoot) lastFileBySource.files = null;
+  if (switchedRoot || scopeChanged || leftSpace) await loadTree();
+  const file = route.documentPath !== undefined
+    ? route.documentPath
+    : ((switchedRoot || leftSpace) ? lastFileBySource.files || state.tree[0] : undefined);
+  if (file) await loadFile(file);
 }
 
-// mirrors the skills breadcrumb's "skill / file" shape: a friendly label
-// instead of the raw internal doc id (e.g. `claude-memory--Users-.../x.md`)
-function agentConfigBreadcrumb(agentTree, file) {
-  for (const group of agentTree.groups) {
-    const f = group.files && group.files.find((x) => x.id === file);
-    if (f) return f.label;
-    for (const proj of group.projects || []) {
-      if (proj.memoryDoc && proj.memoryDoc.id === file) return `${proj.label} / ${proj.memoryDoc.label}`;
-      const pf = proj.files.find((x) => x.id === file);
-      if (pf) return `${proj.label} / ${pf.label}`;
-    }
+// funnel for every URL-changing move: flushes a dirty save first so a rejected
+// flush leaves the address bar untouched (conflict #14), then pushes the
+// formatRouteContext URL and applies the new route together.
+async function navigateTo(route) {
+  if (save.isDirty()) {
+    await save.flush();
+    if (save.isDirty()) return;
   }
-  return file;
+  const url = formatRouteContext(route);
+  navIdx += 1;
+  navMax = navIdx;
+  history.pushState({ idx: navIdx }, '', url);
+  updateNavButtons();
+  await applyRoute(route);
+}
+
+function navigate(file) {
+  const href = documentHrefs.get(file);
+  if (href) {
+    const route = parseRouteContext(href);
+    if (route) return navigateTo(route);
+  }
+  if (isSourceView(viewState.view)) return navigateTo({ ...currentRoute, documentRoute: file });
+  return navigateTo({ space: 'root', rootKey: currentRoute.rootKey, scopePath: currentRoute.scopePath, documentPath: file });
 }
 
 function setFnameForFile(file) {
   const parts = file.split('/');
-  if (state.agentTree) fnameTrack.textContent = agentConfigBreadcrumb(state.agentTree, file);
-  else fnameTrack.textContent = state.skillsTree && parts.length >= 3 ? `${parts[1]} / ${parts[parts.length - 1]}` : file;
+  fnameTrack.textContent = breadcrumbForDocument(state.navigation, file);
   document.title = parts[parts.length - 1];
 }
 
@@ -1069,9 +1170,11 @@ async function loadFile(file, preserveScroll) {
   lastFileBySource[viewState.view.source] = file;
   if (isSettingsOpen(viewState.view)) exitSettingsView();
   if (save.isDirty()) await save.flush();
+  saveAddress = { route: { ...currentRoute }, file };
   if (state.file !== file) docView.resetCollapsedHeadings();
   state.file = file;
   pipeline.setDocId(file);
+  pipeline.setAssetUrl(docs().assetUrl);
   if (nav.selected !== file) nav = nextNav(nav, { type: 'select', id: null });
   stopMarquee(fname);
   setFnameForFile(file);
@@ -1080,7 +1183,7 @@ async function loadFile(file, preserveScroll) {
   save.resolveExternal('keep');
   if (isVersionOpen(viewState.view)) historyView.backToCurrent();
   const scrollTop = preserveScroll ? main.scrollTop : 0;
-  const res = await api.raw(file);
+  const res = await docs().raw(file);
   let text;
   if (res.ok) text = await res.text();
   else if (res.status === 404) text = '# not found';
@@ -1104,8 +1207,16 @@ async function loadFile(file, preserveScroll) {
   if (!panelClosed()) historyView.load();
 }
 
+// history-view stays root-agnostic in its own module; this closure is where it
+// learns the current root, read fresh on every call since navigation can
+// change currentRoute.rootKey underneath an already-open panel.
+const rootScopedHistoryApi = {
+  history: (path) => docs().history(path),
+  diff: (path, rev, repo) => docs().diff(path, rev, repo),
+};
+
 const historyView = createHistoryView({
-  panelBtn, panel, verList, restoreBtn, diffTime, diffBody, api,
+  panelBtn, panel, verList, restoreBtn, diffTime, diffBody, api: rootScopedHistoryApi,
   getFile: () => state.file,
   viewState,
 });
@@ -1181,14 +1292,44 @@ function connectEvents() {
   es.onerror = () => {
     if (serverGone) return;
     serverGone = true;
-    setSaveState('error', 'Connection lost', rootInfo && rootInfo.launchedFrom === 'app'
+    setSaveState('error', 'Connection lost', bootData.root && bootData.root.launchedFrom === 'app'
       ? 'ShowMD stopped — reopen the ShowMD app'
       : 'showmd stopped — run showmd again in your terminal');
   };
   es.onmessage = async (e) => {
     const data = JSON.parse(e.data);
-    if (data.event === 'root-changed') return handleRootChanged(data.root, data.doc);
+    // broadcast before the process exits for a restart; carries no rootKey,
+    // so it is not caught by the per-root filter below and reaches every tab
+    if (data.event === 'server-restarting') {
+      setSaveState('saving', 'Restarting…', 'waiting for showmd to come back');
+      followRestart(data.port, {
+        pathname: window.location.pathname, search: window.location.search, hash: window.location.hash,
+      }).then((result) => {
+        if (!result.ok) {
+          setSaveState('error', 'Connection lost', bootData.root && bootData.root.launchedFrom === 'app'
+            ? 'ShowMD stopped — reopen the ShowMD app'
+            : 'showmd stopped — run showmd again in your terminal');
+        } else if (result.samePort) {
+          serverGone = false;
+          save.setDirty(save.isDirty());
+          refreshTree();
+        }
+      });
+      return;
+    }
+    // events for a root this tab is not addressing belong to another tab's
+    // Root Space — two tabs on two roots must not cross-refresh each other
+    if (data.rootKey !== undefined && data.rootKey !== currentRoute.rootKey) return;
     const { path, event } = data;
+    // the root itself is gone: no tree left to refresh. renderRootNotOpen
+    // only hides panes (view-state.js's commit just toggles `hidden`), so a
+    // dirty editor buffer keeps its content instead of being discarded.
+    if (event === 'root-removed') { renderRootNotOpen(); return; }
+    // the ancestor root this tab was on got promoted to a wider parent: the
+    // same bytes are still served, just under the parent's rootKey with the
+    // old root's relative position as a scope prefix — rewrite in place
+    // rather than refetch, since nothing the user sees actually changed
+    if (event === 'root-promoted') { await applyRootPromotion(data); return; }
     // content-only edits to the file already open can't reshape the tree;
     // anything else (new file, rename, delete) can
     if (event !== 'change' || path !== state.file) refreshTree();
@@ -1196,7 +1337,7 @@ function connectEvents() {
     if (!panelClosed()) historyView.load();
     let res = null;
     try {
-      res = await api.raw(path);
+      res = await docs().raw(path);
     } catch {
       res = null;
     }
@@ -1274,13 +1415,13 @@ fnameSymlink.addEventListener('click', () => {
 
 // `disabled` here is a CSS class, not the attribute — the click still fires at
 // the ends of the stack, so the guard has to be explicit
-function goBack() { if (navIdx > 0) history.back(); }
+function goBack() { if (canGoBack()) history.back(); }
 function goForward() { if (navIdx < navMax) history.forward(); }
 backBtn.addEventListener('click', goBack);
 fwdBtn.addEventListener('click', goForward);
 
 revealBtn.addEventListener('click', async () => {
-  const p = api.reveal(isSettingsOpen(viewState.view) ? { settings: true } : { path: state.file });
+  const p = isSettingsOpen(viewState.view) ? api.revealSettings() : (state.file ? docs().reveal(state.file) : null);
   if (!p) return;
   try {
     const res = await p;
@@ -1322,7 +1463,7 @@ restoreBtn.addEventListener('click', async () => {
   if (!isVersionOpen(viewState.view) || !state.file) return;
   let res;
   try {
-    res = await api.restore(state.file, viewState.view.version.rev, viewState.view.version.repo);
+    res = await docs().restore(state.file, viewState.view.version.rev, viewState.view.version.repo);
   } catch {
     res = null;
   }
@@ -1337,11 +1478,11 @@ restoreBtn.addEventListener('click', async () => {
 // use when it's showing, and fall back to the equivalent action otherwise.
 function openFileShortcut() {
   if (home.launcherKeyboardActive()) home.activateLauncherRow(document.getElementById('launcher-open-file'));
-  else home.pickRoot({ mode: 'file' });
+  else home.openTarget('open-file');
 }
 function openFolderShortcut() {
   if (home.launcherKeyboardActive()) home.activateLauncherRow(document.getElementById('launcher-open-folder'));
-  else home.pickRoot({ mode: 'folder' });
+  else home.openTarget('open-folder');
 }
 function browseSkillsShortcut() {
   if (home.launcherKeyboardActive()) home.launcherBrowseSkills();
@@ -1359,6 +1500,7 @@ document.addEventListener('keydown', (e) => {
   if (e.shiftKey && key === 'o') { e.preventDefault(); openFolderShortcut(); return; }
   if (e.shiftKey && key === 's') { e.preventDefault(); browseSkillsShortcut(); return; }
   if (e.shiftKey && key === 'a') { e.preventDefault(); browseAgentConfigShortcut(); return; }
+  if (e.shiftKey && key === 'h') { e.preventDefault(); navigateTo({ space: 'home' }); return; }
   if (key === 'o') { e.preventDefault(); openFileShortcut(); return; }
   if (home.launcherKeyboardActive()) return;
   if (key === '[') { e.preventDefault(); goBack(); return; }
@@ -1380,7 +1522,8 @@ document.addEventListener('keydown', (e) => {
   if (cmEditor && editorHost.contains(document.activeElement)) return;
   if (key === 'e') { e.preventDefault(); setMode(MODE_CYCLE[viewState.view.mode]); }
   else if (key === 's' && viewState.view.mode !== 'read') { e.preventDefault(); save.flush(); }
-  else if (key === 'h' && e.shiftKey) { e.preventDefault(); setPanel(panelClosed()); }
+  // shifted backslash arrives as '|' on US layouts
+  else if ((key === '\\' || key === '|') && e.shiftKey) { e.preventDefault(); setPanel(panelClosed()); }
   else if (key === '\\') { e.preventDefault(); toggleSidebar(); }
 });
 
@@ -1466,7 +1609,7 @@ function setTheme(next, { persist = true } = {}) {
   applyTheme();
   if (persist) saveSetting('colorMode', next);
   if (viewState.view.mode === 'edit' && cmEditor) cmEditor.refreshBlocks();
-  else if (viewState.view.mode === 'read' && state.file) blocks.renderMermaidIn(doc).catch((err) => console.error('showmd: mermaid enhance failed', err));
+  else if (viewState.view.mode === 'read' && state.file) blocks.refreshThemeIn(doc);
 }
 window.showmdSetTheme = setTheme;
 
@@ -1491,16 +1634,6 @@ function initTheme(settings) {
   });
 }
 
-// what a reload onto a hash reopens. Only Settings sits over a file, so only
-// Settings restores one: skills/agents files live outside the root and are not
-// recoverable from the pathname, and Home is not about a file at all.
-const BOOT_VIEWS = {
-  '#settings': { restoresFile: true, enter: enterSettingsView },
-  '#skills': { restoresFile: false, enter: home.launcherBrowseSkills },
-  '#agents': { restoresFile: false, enter: home.launcherBrowseAgentConfig },
-  '#home': { restoresFile: false, enter: home.showLauncher },
-};
-
 let bootSettings = null;
 
 async function init() {
@@ -1515,10 +1648,19 @@ async function init() {
   const savedWidth = parseInt(localStorage.getItem('showmd-sidebar-width'), 10);
   if (savedWidth) setSidebarWidth(savedWidth);
   setPanelTab(localStorage.getItem('showmd-panel-tab') || 'info');
-  // server-marked launcher boot: skip the doomed /api/tree request outright.
+  const bootRoute = bootData.route || { space: 'home' };
+  const bootSpace = bootRoute.space === 'skills' || bootRoute.space === 'agents';
+  if (bootRoute.space === 'root') {
+    currentRoute = { space: 'root', rootKey: bootRoute.rootKey, scopePath: bootRoute.scopePath, documentPath: bootRoute.documentPath };
+  } else if (bootRoute.space === 'settings') {
+    // Settings sits over a root's tree, so its own key still drives initRoot
+    currentRoute = { space: 'settings', rootKey: bootRoute.rootKey };
+  } else if (bootSpace) {
+    currentRoute = { ...bootRoute };
+  }
+  // server-marked launcher boot: skip the doomed tree request outright.
   // allSettled either way, so a rejected initRoot/loadTree can never strand
-  // connectEvents() below unconnected — that SSE is how pickRoot's success
-  // (root-changed) reaches this page in launcher mode
+  // connectEvents() below unconnected
   const launcherBoot = document.body.classList.contains('launcher');
   // hands first-paint hiding off from the CSS-only body.launcher-boot marker
   // (display:none, can't animate) to the same JS-driven state showLauncher()
@@ -1530,33 +1672,63 @@ async function init() {
     appLogo.hidden = true;
     // through the pane record, not launcherView.hidden directly: hideLauncher
     // keys off the overlay, so a boot that skipped it would strand the header
-    // hidden on the way out (bootView 'agents' takes exactly that path)
+    // hidden on the way out (a boot straight into a space takes that path)
     viewState.dispatch({ type: 'launcher-open' });
     document.body.classList.remove('launcher-boot');
   }
-  await Promise.allSettled([initRoot(), launcherBoot ? Promise.resolve() : loadTree()]);
-  const boot = BOOT_VIEWS[location.hash];
-  const file = !boot || boot.restoresFile ? currentFileFromLocation() || state.tree[0] : null;
-  history.replaceState({ idx: 0 }, '', location.pathname + location.hash);
-  if (file) {
-    await loadFile(file);
-    if (settings.openMode === 'edit') await setMode('edit');
+  await Promise.allSettled([initRoot(), (launcherBoot || bootSpace) ? Promise.resolve() : loadTree()]);
+  history.replaceState({ idx: 0 }, '', location.pathname + location.search + location.hash);
+  if (bootSpace) {
+    // a space boots off its own route: the tree and the opened document both
+    // come from the URL, so a reload lands exactly where the tab was
+    const entered = await (bootRoute.space === 'skills' ? enterSkillsView() : enterAgentConfigView());
+    if (entered !== false) {
+      if (bootRoute.documentRoute) await loadFile(bootRoute.documentRoute);
+      else openDefaultFile(typeof entered === 'string' ? entered : undefined);
+      if (settings.openMode === 'edit' && state.file) await setMode('edit');
+    }
+  } else {
+    const file = currentRoute.documentPath || state.tree[0];
+    if (file) {
+      await loadFile(file);
+      if (settings.openMode === 'edit') await setMode('edit');
+    }
   }
-  if (boot) {
-    // a reload is not a launcher click: exiting lands on the open root's tree
-    // when there is one, and only falls back to Home when there is not
-    returnTo = rootInfo && rootInfo.dir ? 'files' : 'home';
-    await boot.enter();
-  }
+  if (bootRoute.space === 'settings') await enterSettingsView();
   updateNavButtons();
   historyView.probe();
   connectEvents();
   window.addEventListener('popstate', (e) => {
-    navIdx = (e.state && typeof e.state.idx === 'number') ? e.state.idx : 0;
-    navMax = Math.max(navMax, navIdx);
-    updateNavButtons();
-    const f = currentFileFromLocation();
-    if (f) loadFile(f);
+    const targetIdx = (e.state && typeof e.state.idx === 'number') ? e.state.idx : 0;
+    if (restoringPopstate) {
+      restoringPopstate = false;
+      navIdx = targetIdx;
+      navMax = Math.max(navMax, navIdx);
+      updateNavButtons();
+      return;
+    }
+    const sourceIdx = navIdx;
+    const sourceUrl = formatRouteContext(currentRoute);
+    const targetRoute = parseRouteContext(location.href);
+    popstateTransition = popstateTransition.then(async () => {
+      if (save.isDirty()) {
+        await save.flush();
+        if (save.isDirty()) {
+          const delta = sourceIdx - targetIdx;
+          if (delta) {
+            restoringPopstate = true;
+            history.go(delta);
+          } else {
+            history.replaceState({ idx: sourceIdx }, '', sourceUrl);
+          }
+          return;
+        }
+      }
+      navIdx = targetIdx;
+      navMax = Math.max(navMax, navIdx);
+      updateNavButtons();
+      await applyRoute(targetRoute);
+    }).catch(() => {});
   });
 }
 

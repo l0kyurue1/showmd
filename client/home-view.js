@@ -1,4 +1,6 @@
 import { isLauncherOpen, isSourceView } from './view-state.js';
+import { parseRouteContext } from './route.js';
+import { confirmDialog as defaultConfirmDialog } from './confirm-dialog.js';
 
 const RECENT_MAX = 5;
 
@@ -8,9 +10,11 @@ export function createHomeView({
   launcherView, launcherRecentWrap, launcherRecentGroup, launcherErrorEl,
   launcherOpenFolderBtn, launcherOpenFileBtn, launcherBrowseSkillsBtn, launcherBrowseAgentConfigBtn, launcherSettingsBtn,
   viewState,
-  getRootInfo, getReturnTo, setReturnTo,
+  getRootInfo, getBackLabel, getTreeLength,
   getPanelOpen, setPanel,
-  enterSkillsView, enterAgentConfigView, enterSettingsView,
+  openSkills, openAgentConfig, openSettings,
+  navigateTo,
+  confirmDialog = defaultConfirmDialog,
 }) {
   const switcherEl = document.createElement('div');
   switcherEl.className = 'root-switcher';
@@ -83,19 +87,35 @@ export function createHomeView({
 
   async function recentEntries({ foldersOnly = false } = {}) {
     const { list: all, failed } = await apiRecents();
-    const rootInfo = getRootInfo();
-    const list = foldersOnly
-      ? all.filter((e) => e.kind === 'folder' && e.path !== (rootInfo && rootInfo.dir))
-      : all;
+    const list = foldersOnly ? all.filter((e) => e.kind === 'folder') : all;
     return { list: list.slice(0, RECENT_MAX), failed };
   }
 
+  // bootData.roots is the shared client-side registry cache app.js reads by
+  // key (findRootSummary) — merging every fresh server listing into it here
+  // is what lets the switcher jump straight to a root this tab never booted
+  // with (added in another tab, or just added in this one).
+  async function liveRoots() {
+    let roots = bootData.roots || [];
+    try {
+      const res = await api.listRoots();
+      if (res.ok) {
+        roots = (await res.json()).roots;
+        for (const r of roots) {
+          if (!bootData.roots.some((x) => x.key === r.key)) bootData.roots.push(r);
+        }
+      }
+    } catch {}
+    return roots;
+  }
+
   async function renderRecentRows() {
-    const { list, failed } = await recentEntries({ foldersOnly: true });
+    const [{ list, failed }, roots] = await Promise.all([recentEntries({ foldersOnly: true }), liveRoots()]);
     switcherRecentEl.replaceChildren();
     switcherRecentWrap.hidden = list.length === 0;
     if (failed) showSwitcherNotice("Couldn't load recent folders.");
     for (const { path: dir } of list) {
+      const liveRoot = roots.find((r) => r.dir === dir);
       const item = document.createElement('div');
       item.className = 'root-switcher-recent-item';
       const row = document.createElement('button');
@@ -103,7 +123,10 @@ export function createHomeView({
       row.className = 'root-switcher-recent-row';
       row.textContent = dir.split('/').filter(Boolean).pop() || dir;
       row.title = dir;
-      row.addEventListener('click', () => pickRoot({ dir }));
+      row.addEventListener('click', () => addRootAndNavigate(dir));
+      item.appendChild(row);
+      const actions = document.createElement('div');
+      actions.className = 'root-switcher-recent-actions';
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'root-switcher-recent-del';
@@ -112,11 +135,38 @@ export function createHomeView({
       del.title = 'Remove from recent';
       del.addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteRecent(dir).then(renderRecentRows);
+        forgetRecent(dir, liveRoot).then((ok) => { if (ok) renderRecentRows(); });
       });
-      item.append(row, del);
+      actions.appendChild(del);
+      item.appendChild(actions);
       switcherRecentEl.appendChild(item);
     }
+  }
+
+  // the single warning the plan calls for (not persisted, not the deferred
+  // live-dirty-report preflight): confirm once, then DELETE proceeds. Every
+  // open tab on this root learns of the removal from the root-removed SSE
+  // event, including this tab when it is the current root — this function
+  // itself never navigates or closes the switcher. A non-live row skips the
+  // dialog entirely and just drops the Recents entry.
+  async function forgetRecent(dir, liveRoot) {
+    if (liveRoot) {
+      const choice = await confirmDialog('forget-folder-dialog', {
+        title: `Forget ${liveRoot.name}?`,
+        body: 'Open tabs showing this folder will close, and edits made outside showmd will stop appearing live.',
+        confirmLabel: 'Forget folder',
+      });
+      if (choice !== 'confirm') return false;
+      try {
+        const res = await api.removeRoot(liveRoot.key);
+        if (!res.ok && res.status !== 404) { showSwitcherNotice('Could not forget that folder.'); return false; }
+      } catch {
+        showSwitcherNotice('Could not forget that folder.');
+        return false;
+      }
+      bootData.roots = (bootData.roots || []).filter((x) => x.key !== liveRoot.key);
+    }
+    return deleteRecent(dir);
   }
 
   function showSwitcherNotice(text) {
@@ -158,7 +208,7 @@ export function createHomeView({
     switcherEl.hidden = rootless && !backMode;
     switcherEl.classList.toggle('back-mode', backMode);
     switcherIconEl.innerHTML = backMode ? svg.arrowLeft : svg.folder;
-    switcherNameEl.textContent = backMode ? `Back to ${rootless || getReturnTo() === 'home' ? 'Home' : rootInfo.name}` : rootInfo.name;
+    switcherNameEl.textContent = backMode ? `Back to ${getBackLabel()}` : rootInfo.name;
     switcherChevronEl.hidden = backMode;
     agentSwitcherEl.hidden = view.source !== 'agents';
     renderNavFooterNarrow();
@@ -173,26 +223,28 @@ export function createHomeView({
     footerEl.classList.toggle('narrow', narrow && isSourceView(viewState.view));
   }
 
-  async function pickRoot(body, notify = showSwitcherNotice, busyEl = null) {
+  // addRoot mutates no dialog state; it just registers the target with
+  // RootManager and hands back the URL to land on (a document URL for a file
+  // target, the root's own URL for a folder).
+  async function addRootAndNavigate(targetPath, notify = showSwitcherNotice, busyEl = null) {
     const openLabel = busyEl && busyEl.querySelector('span');
     const restoreLabel = openLabel && openLabel.textContent;
-    if (!body.dir && busyEl) {
-      // native dialog takes ~1-2s to spawn (osascript + AppKit load); show it
-      busyEl.disabled = true;
-      if (openLabel) openLabel.textContent = 'Opening…';
-    }
     try {
-      const res = await api.pickRoot(body);
+      const res = await api.addRoot(targetPath);
       if (res.status === 400) {
-        if (body.dir) { await deleteRecent(body.dir); renderRecentRows(); }
+        await deleteRecent(targetPath);
+        renderRecentRows();
         notify('That folder is no longer available.');
         return;
       }
       if (!res.ok) { notify('Could not open folder.'); return; }
       const data = await res.json();
-      // {ok:true} lands here too; the tree/switcher refresh happens off the
-      // SSE root-changed event so every client watching this root stays in sync
-      if (data.canceled) return;
+      if (!bootData.roots.some((r) => r.key === data.root.key)) bootData.roots.push(data.root);
+      const route = parseRouteContext(data.url);
+      if (route) {
+        closeSwitcherMenu();
+        await navigateTo(route);
+      }
     } catch {
       notify('Could not open folder.');
     } finally {
@@ -203,10 +255,32 @@ export function createHomeView({
     }
   }
 
-  function openTarget(kind, notify, busyEl = null) {
-    return kind === 'open-file'
-      ? pickRoot({ mode: 'file' }, notify, busyEl)
-      : pickRoot({ mode: 'folder', startDir: blockedDir || undefined }, notify, busyEl);
+  async function openTarget(kind, notify = showSwitcherNotice, busyEl = null) {
+    const mode = kind === 'open-file' ? 'file' : 'folder';
+    const openLabel = busyEl && busyEl.querySelector('span');
+    const restoreLabel = openLabel && openLabel.textContent;
+    if (busyEl) {
+      // native dialog takes ~1-2s to spawn (osascript + AppKit load); show it
+      busyEl.disabled = true;
+      if (openLabel) openLabel.textContent = 'Opening…';
+    }
+    // addRootAndNavigate owns clearing busyEl on its own paths; this function
+    // only clears it on the picker paths that never reach that call.
+    const clearBusy = () => {
+      if (!busyEl) return;
+      busyEl.disabled = false;
+      if (openLabel) openLabel.textContent = restoreLabel;
+    };
+    try {
+      const res = await api.pickFolder({ mode, startDir: mode === 'folder' ? (blockedDir || undefined) : undefined });
+      if (!res.ok) { notify('Could not open the file picker.'); clearBusy(); return; }
+      const data = await res.json();
+      if (data.canceled) { clearBusy(); return; }
+      return addRootAndNavigate(data.path, notify, busyEl);
+    } catch {
+      notify('Could not open the file picker.');
+      clearBusy();
+    }
   }
 
   function showLauncherNotice(text, { sticky = false } = {}) {
@@ -279,33 +353,31 @@ export function createHomeView({
     });
   }
 
-  function launcherBrowseSkills() {
+  // the space reports its own load failure in the sidebar; an empty catalog is
+  // the case only the launcher can explain
+  function browseSpace(open, source, emptyNotice) {
     launcherSidebarWasCollapsed = false;
-    hideLauncher();
-    // enterSkillsView reports its own load failure in the sidebar and returns
-    // whether it landed on a file; a clean entry with nothing in it is the case
-    // the launcher has to explain
-    return enterSkillsView().then((opened) => {
-      if (!opened && viewState.view.source === 'skills') { showLauncher(); showLauncherNotice('No skills found.', { sticky: true }); }
+    return open().then(() => {
+      if (!getTreeLength() && viewState.view.source === source) { showLauncher(); showLauncherNotice(emptyNotice, { sticky: true }); }
     });
   }
 
+  function launcherBrowseSkills() {
+    return browseSpace(openSkills, 'skills', 'No skills found.');
+  }
+
   function launcherBrowseAgentConfig() {
-    launcherSidebarWasCollapsed = false;
-    hideLauncher();
-    return enterAgentConfigView().then((opened) => {
-      if (!opened && viewState.view.source === 'agents') { showLauncher(); showLauncherNotice('No agent config found.', { sticky: true }); }
-    });
+    return browseSpace(openAgentConfig, 'agents', 'No agent config found.');
   }
 
   function activateLauncherRow(el) {
     const kind = el.dataset.kind;
     clearLauncherNotice();
     if (kind === 'open-folder' || kind === 'open-file') openTarget(kind, stickyLauncherNotice);
-    else if (kind === 'browse-skills') { setReturnTo('home'); launcherBrowseSkills(); }
-    else if (kind === 'browse-agent-config') { setReturnTo('home'); launcherBrowseAgentConfig(); }
-    else if (kind === 'settings') enterSettingsView();
-    else if (kind === 'recent') pickRoot({ dir: el.dataset.path }, stickyLauncherNotice);
+    else if (kind === 'browse-skills') launcherBrowseSkills();
+    else if (kind === 'browse-agent-config') launcherBrowseAgentConfig();
+    else if (kind === 'settings') openSettings();
+    else if (kind === 'recent') addRootAndNavigate(el.dataset.path, stickyLauncherNotice);
   }
 
   function showLauncher() {
@@ -365,7 +437,7 @@ export function createHomeView({
 
   return {
     switcherEl, switcherBtn, switcherOpenFolderBtn, switcherOpenFileBtn, switcherHomeBtn, switcherMenu,
-    pickRoot, openTarget, renderSwitcher, renderNavFooterNarrow,
+    openTarget, renderSwitcher, renderNavFooterNarrow,
     openSwitcherMenu, closeSwitcherMenu,
     showLauncherNotice,
     launcherBrowseSkills, launcherBrowseAgentConfig, activateLauncherRow,

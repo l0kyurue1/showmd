@@ -103,10 +103,18 @@ test('mark: ==text== renders <mark>', () => {
 test('img tag: sized <img> renders with whitelisted attrs and resolved src', () => {
   const p = pipeline();
   p.setDocId('docs/guide.md');
+  p.setAssetUrl((id) => `/api/roots/r_AAAAAAAAAAAAAAAAAAAAAA/asset?path=${encodeURIComponent(id)}`);
   const html = p.render('<img src="media/logo.png" width="64" height="64">');
-  assert.match(html, /<img src="\/api\/asset\?path=docs%2Fmedia%2Flogo\.png"[^>]*>/);
+  assert.match(html, /<img src="\/api\/roots\/r_AAAAAAAAAAAAAAAAAAAAAA\/asset\?path=docs%2Fmedia%2Flogo\.png"[^>]*>/);
   assert.match(html, /width="64"/);
   assert.match(html, /height="64"/);
+});
+
+test('img tag: without an asset URL builder the src is left unresolved (no space to address)', () => {
+  const p = pipeline();
+  p.setDocId('docs/guide.md');
+  const html = p.render('<img src="media/logo.png">');
+  assert.match(html, /<img src="media\/logo\.png"/);
 });
 
 test('img tag: alt and title survive, event handlers do not', () => {

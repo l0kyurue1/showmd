@@ -6,6 +6,15 @@ import { JSDOM } from 'jsdom';
 
 const require = createRequire(import.meta.url);
 const markdownit = require('markdown-it');
+const { formatRouteContext } = require('../../../../server/route-context.js');
+
+// a fixed key so tests can assert against a stable /r/<key>/... URL; matches
+// server/root-identity.js's r_ + 22-char base64url grammar.
+export const TEST_ROOT_KEY = 'r_AAAAAAAAAAAAAAAAAAAAAA';
+
+export function rootScopedPath(tail, key = TEST_ROOT_KEY) {
+  return `/api/roots/${key}/${tail}`;
+}
 
 register('./fake-editor-loader.mjs', import.meta.url);
 
@@ -145,10 +154,31 @@ let bootCount = 0;
 export async function bootApp({
   tree = [], root = null, settings = {}, settingsResponse = null, files = {}, rawOverrides = {},
   userAgent, systemDark = false, localStorageSeed = {},
+  route, roots, routeError, skillsTree = null, skillFiles = {}, agentTree = null, agentFiles = {},
 } = {}) {
   bootCount += 1;
+  // legacy `root:` callers get a synthesized Root Space route/summary under a
+  // fixed test key, so every existing direct-boot-into-a-file test keeps
+  // working without knowing about routes at all
+  const resolvedRoute = route !== undefined ? route : (root ? { space: 'root', rootKey: TEST_ROOT_KEY } : null);
+  const resolvedRoots = roots !== undefined ? roots
+    : (root ? [{ key: TEST_ROOT_KEY, dir: root.dir, name: root.name || 'root', url: `/r/${TEST_ROOT_KEY}/` }] : []);
+  const bootUrl = resolvedRoute ? new URL(formatRouteContext(resolvedRoute), 'http://localhost/').href : 'http://localhost/';
+
+  // settings is deliberately absent here (unlike the real server's boot.settings):
+  // existing tests rely on bootData.settings staying unset so init() falls
+  // through to the fetched /api/settings route below, and settingsResponse
+  // overrides that fetch independently of the `settings` param.
+  const bootData = { root, roots: resolvedRoots };
+  if (resolvedRoute) bootData.route = resolvedRoute;
+  if (routeError) bootData.routeError = routeError;
+  const html = INDEX_HTML.replace(
+    '<script type="module"',
+    `<script type="application/json" id="boot-data">${JSON.stringify(bootData)}</script>\n<script type="module"`
+  );
+
   // pretendToBeVisual: CodeMirror's editor bundle calls window.requestAnimationFrame
-  const dom = new JSDOM(INDEX_HTML, { url: 'http://localhost/', pretendToBeVisual: true });
+  const dom = new JSDOM(html, { url: bootUrl, pretendToBeVisual: true });
   const { window } = dom;
   // jsdom's constructor `userAgent` option only takes effect nested under
   // `resources`, which also switches on real (network) resource loading for
@@ -158,20 +188,39 @@ export async function bootApp({
   window.addEventListener('error', (e) => errors.push(e.error || new Error(e.message)));
 
   const fetchFake = createFakeFetch();
-  fetchFake.on('GET', '/api/tree', () => ({ body: tree }));
-  fetchFake.on('GET', '/api/root', () => (root ? { body: root } : { status: 404, body: {} }));
+  const rootScopedTail = (tail) => new RegExp(`^/api/roots/[^/]+/${tail}$`);
+  fetchFake.on('GET', (url) => rootScopedTail('tree').test(url.pathname), () => ({ body: tree }));
+  if (skillsTree) {
+    fetchFake.on('GET', '/api/skills/tree', () => ({ body: skillsTree }));
+    fetchFake.on('GET', '/api/skills/raw', ({ url }) => {
+      const id = url.searchParams.get('id');
+      return Object.prototype.hasOwnProperty.call(skillFiles, id)
+        ? { status: 200, text: skillFiles[id] }
+        : { status: 404, body: { error: 'not found' } };
+    });
+  }
+  if (agentTree) {
+    fetchFake.on('GET', (url) => /^\/api\/agents\/[^/]+\/tree$/.test(url.pathname), () => ({ body: agentTree }));
+    fetchFake.on('GET', (url) => /^\/api\/agents\/[^/]+\/raw$/.test(url.pathname), ({ url }) => {
+      const id = url.searchParams.get('id');
+      return Object.prototype.hasOwnProperty.call(agentFiles, id)
+        ? { status: 200, text: agentFiles[id] }
+        : { status: 404, body: { error: 'not found' } };
+    });
+  }
   // settingsResponse overrides the boot-time settings fetch itself (init()
   // awaits it before bootApp returns, so a test can't stub this route after
   // the fact the way it can with lazily-fetched endpoints)
   fetchFake.on('GET', '/api/settings', () => (settingsResponse || { body: settings }));
   fetchFake.on('GET', '/api/recents', () => ({ body: { recents: [] } }));
-  fetchFake.on('GET', (url) => url.pathname === '/api/raw', ({ url }) => {
+  fetchFake.on('GET', '/api/roots', () => ({ body: { roots: resolvedRoots } }));
+  fetchFake.on('GET', (url) => rootScopedTail('raw').test(url.pathname), ({ url }) => {
     const p = url.searchParams.get('path');
     if (Object.prototype.hasOwnProperty.call(rawOverrides, p)) return rawOverrides[p];
     if (Object.prototype.hasOwnProperty.call(files, p)) return { status: 200, text: files[p] };
     return { status: 404, body: { error: 'not found' } };
   });
-  fetchFake.on('PUT', (url) => url.pathname === '/api/raw', () => ({ status: 200, body: { ok: true } }));
+  fetchFake.on('PUT', (url) => rootScopedTail('raw').test(url.pathname), () => ({ status: 200, body: { ok: true } }));
 
   const EventSourceFake = createFakeEventSource();
   const matchMediaFake = createFakeMatchMedia();

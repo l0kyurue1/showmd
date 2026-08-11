@@ -81,7 +81,7 @@ test('frontmatterEnd finds the closing --- and returns 0 without frontmatter', (
 });
 
 test('editBlockField renders an initial decoration set for a doc with a fenced code block', () => {
-  const blocks = { markdown: (src) => `<pre>${src}</pre>`, highlightCodeIn: async () => {} };
+  const blocks = { renderBlockInto: async () => {} };
   const doc = '```js\nconst x = 1;\n```\n\nafter';
   const state = EditorState.create({
     doc,
@@ -92,6 +92,17 @@ test('editBlockField renders an initial decoration set for a doc with a fenced c
   let count = 0;
   decos.between(0, state.doc.length, () => { count++; });
   assert.ok(count > 0, 'expected at least one block decoration');
+});
+
+test('editBlockField builds Mermaid widgets without reading renderer theme details', () => {
+  const blocks = { renderBlockInto: async () => {} };
+  const doc = '```mermaid\ngraph TD; A-->B\n```\n\nafter';
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: [markdown({ base: markdownLanguage }), blocksFacet.of(blocks), editBlockField],
+  });
+  assert.ok(state.field(editBlockField).size > 0);
 });
 
 test('BulletWidget.eq and toDOM render the glyph', () => {
@@ -127,78 +138,78 @@ test('TaskWidget.toDOM renders a checkbox reflecting checked state', () => {
   assert.equal(unchecked.checked, false);
 });
 
-test('MdBlockWidget.toDOM renders the block through the facet-provided renderer', () => {
+test('MdBlockWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
+  const calls = [];
   const blocks = {
-    markdown: (src) => `<p>rendered:${src}</p>`,
-    highlightCodeIn: async () => {},
+    renderBlockInto: async (target, request) => {
+      calls.push({ target, request });
+      target.innerHTML = `<p>rendered:${request.source}</p>`;
+    },
   };
   const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
   const el = new MdBlockWidget('hello', '4px').toDOM(fakeView);
   assert.equal(el.className, 'doc cm-lp-embed');
   assert.equal(el.style.paddingBottom, '4px');
   assert.equal(el.innerHTML, '<p>rendered:hello</p>');
+  assert.deepEqual(calls[0], { target: el, request: { kind: 'markdown', source: 'hello' } });
 });
 
-test('MathWidget.toDOM renders src as a placeholder then swaps in rendered HTML', async () => {
-  const rendered = Promise.resolve('<span class="katex">x+y</span>');
-  const blocks = { mathHTML: () => rendered };
+test('MathWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
+  const calls = [];
+  const blocks = {
+    renderBlockInto: async (target, request) => {
+      calls.push({ target, request });
+      target.innerHTML = '<span class="katex">x+y</span>';
+    },
+  };
   const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
   const el = new MathWidget('x+y', false, false).toDOM(fakeView);
   assert.equal(el.tagName, 'SPAN');
   assert.equal(el.className, 'cm-lp-math');
-  assert.equal(el.textContent, 'x+y');
-  await rendered;
-  await Promise.resolve();
   assert.equal(el.innerHTML, '<span class="katex">x+y</span>');
+  assert.deepEqual(calls[0], {
+    target: el,
+    request: { kind: 'math', source: 'x+y', display: false },
+  });
 });
 
-test('MathWidget.toDOM renders a div for block math', () => {
-  const blocks = { mathHTML: () => new Promise(() => {}) };
+test('MathWidget.toDOM retains the block host choice', () => {
+  const blocks = { renderBlockInto: async () => {} };
   const fakeView = { state: { facet: () => blocks } };
   const el = new MathWidget('x=1', true, true).toDOM(fakeView);
   assert.equal(el.tagName, 'DIV');
 });
 
-test('MathWidget.toDOM leaves the plain src text in place when rendering fails', async () => {
-  const failed = Promise.reject(new Error('render error'));
-  const blocks = { mathHTML: () => failed };
-  const fakeView = { state: { facet: () => blocks } };
-  const el = new MathWidget('x+y', false, false).toDOM(fakeView);
-  await failed.catch(() => {});
-  await Promise.resolve();
-  assert.equal(el.textContent, 'x+y');
-  assert.equal(el.innerHTML, 'x+y');
-});
-
-test('MermaidWidget.toDOM shows a rendering placeholder then swaps in the SVG', async () => {
-  const rendered = Promise.resolve('<svg>diagram</svg>');
-  const blocks = { mermaidSVG: () => rendered, mermaidErrorEl: () => document.createElement('div') };
+test('MermaidWidget.toDOM delegates rendering while retaining CodeMirror placement', () => {
+  const calls = [];
+  const blocks = {
+    renderBlockInto: async (target, request) => {
+      calls.push({ target, request });
+      target.innerHTML = '<svg>diagram</svg>';
+    },
+  };
   const fakeView = { state: { facet: (f) => (f === blocksFacet ? blocks : undefined) } };
-  const el = new MermaidWidget('graph TD; a-->b', '8px', 'light').toDOM(fakeView);
+  const refresh = {};
+  const el = new MermaidWidget('graph TD; a-->b', '8px', refresh).toDOM(fakeView);
   assert.equal(el.className, 'cm-lp-mermaid');
   assert.equal(el.style.paddingBottom, '8px');
-  assert.equal(el.textContent, 'Rendering diagram…');
-  await rendered;
-  await Promise.resolve();
   assert.equal(el.innerHTML, '<svg>diagram</svg>');
+  assert.deepEqual(calls[0], {
+    target: el,
+    request: { kind: 'mermaid', source: 'graph TD; a-->b' },
+  });
 });
 
-test('MermaidWidget.toDOM replaces the placeholder with the error element on failure', async () => {
-  const err = new Error('bad diagram');
-  const failed = Promise.reject(err);
-  let errCall = null;
-  const blocks = {
-    mermaidSVG: () => failed,
-    mermaidErrorEl: (src, e) => { errCall = { src, e }; const d = document.createElement('div'); d.className = 'cm-lp-mermaid-error'; return d; },
-  };
-  const fakeView = { state: { facet: () => blocks } };
-  const el = new MermaidWidget('graph TD; a-->b', null, 'light').toDOM(fakeView);
-  await failed.catch(() => {});
-  await Promise.resolve();
-  assert.equal(errCall.src, 'graph TD; a-->b');
-  assert.equal(errCall.e, err);
-  assert.equal(el.children.length, 1);
-  assert.equal(el.children[0].className, 'cm-lp-mermaid-error');
+test('MermaidWidget equality uses adapter refresh lifecycle, not renderer theme details', () => {
+  const refresh = {};
+  assert.equal(
+    new MermaidWidget('graph A', null, refresh).eq(new MermaidWidget('graph A', null, refresh)),
+    true,
+  );
+  assert.equal(
+    new MermaidWidget('graph A', null, refresh).eq(new MermaidWidget('graph A', null, {})),
+    false,
+  );
 });
 
 function collectGaps(state) {

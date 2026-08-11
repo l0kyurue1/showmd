@@ -5,6 +5,7 @@ import { mathSpans, markSpans, TASK_CLASS, toggleTaskMark, frontmatterEndLine } 
 
 const blocksRefresh = StateEffect.define();
 const blocksFacet = Facet.define({ combine: (values) => values[values.length - 1] });
+const blockRefreshes = new WeakMap();
 
 // matches the UA default list-style-type chain read mode inherits: disc, circle,
 // square, square...
@@ -72,8 +73,7 @@ class MdBlockWidget extends WidgetType {
     const div = document.createElement('div');
     div.className = 'doc cm-lp-embed';
     if (this.gap) div.style.paddingBottom = this.gap;
-    div.innerHTML = blocks.markdown(this.src);
-    blocks.highlightCodeIn(div).catch(() => {});
+    blocks.renderBlockInto(div, { kind: 'markdown', source: this.src });
     return div;
   }
   ignoreEvent() { return false; }
@@ -86,32 +86,26 @@ class MathWidget extends WidgetType {
     const blocks = view.state.facet(blocksFacet);
     const el = document.createElement(this.asBlock ? 'div' : 'span');
     el.className = 'cm-lp-math';
-    el.textContent = this.src;
-    blocks.mathHTML(this.src, this.display)
-      .then((html) => { if (html) el.innerHTML = html; })
-      .catch(() => {});
+    blocks.renderBlockInto(el, { kind: 'math', source: this.src, display: this.display });
     return el;
   }
   ignoreEvent() { return false; }
 }
 
 class MermaidWidget extends WidgetType {
-  constructor(src, gap, theme) {
+  constructor(src, gap, refresh) {
     super();
     this.src = src;
     this.gap = gap;
-    this.theme = theme;
+    this.refresh = refresh;
   }
-  eq(other) { return other.src === this.src && other.theme === this.theme && other.gap === this.gap; }
+  eq(other) { return other.src === this.src && other.refresh === this.refresh && other.gap === this.gap; }
   toDOM(view) {
     const blocks = view.state.facet(blocksFacet);
     const div = document.createElement('div');
     div.className = 'cm-lp-mermaid';
     if (this.gap) div.style.paddingBottom = this.gap;
-    div.textContent = 'Rendering diagram…';
-    blocks.mermaidSVG(this.src)
-      .then((svg) => { div.innerHTML = svg; })
-      .catch((err) => { div.innerHTML = ''; div.appendChild(blocks.mermaidErrorEl(this.src, err)); });
+    blocks.renderBlockInto(div, { kind: 'mermaid', source: this.src });
     return div;
   }
   ignoreEvent() { return false; }
@@ -243,6 +237,7 @@ function blockGaps(tree, doc, fmEnd) {
 function buildBlockDecos(state) {
   const doc = state.doc;
   const blocks = state.facet(blocksFacet);
+  const refresh = blockRefreshes.get(blocks);
   const onActiveLine = makeOnActiveLine(state);
   const decos = [];
   const tree = syntaxTree(state);
@@ -266,7 +261,7 @@ function buildBlockDecos(state) {
           if (lang === 'mermaid') {
             const codeText = node.node.getChild('CodeText');
             const src = codeText ? doc.sliceString(codeText.from, codeText.to) : '';
-            replaceBlock(node.from, to, new MermaidWidget(src, takeGap(node.from), blocks.currentTheme()));
+            replaceBlock(node.from, to, new MermaidWidget(src, takeGap(node.from), refresh));
           } else {
             replaceBlock(node.from, to, new MdBlockWidget(doc.sliceString(node.from, to), takeGap(node.from)));
           }
@@ -296,9 +291,11 @@ function buildBlockDecos(state) {
 
 const editBlockField = StateField.define({
   create: buildBlockDecos,
-  update: (value, tr) => (
-    tr.docChanged || tr.selection || tr.effects.some((e) => e.is(blocksRefresh)) ? buildBlockDecos(tr.state) : value
-  ),
+  update: (value, tr) => {
+    const refresh = tr.effects.some((effect) => effect.is(blocksRefresh));
+    if (refresh) blockRefreshes.set(tr.state.facet(blocksFacet), {});
+    return tr.docChanged || tr.selection || refresh ? buildBlockDecos(tr.state) : value;
+  },
   provide: (f) => EditorView.decorations.from(f),
 });
 
