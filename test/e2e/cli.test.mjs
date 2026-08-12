@@ -423,8 +423,12 @@ test('install-skill: exits 0 and lands SKILL.md under a fake HOME', async () => 
     const canonical = path.join(home, '.agents', 'skills', 'showmd', 'SKILL.md');
     assert.match(readFileSync(canonical, 'utf8'), /^name: showmd$/m, 'canonical copy carries the frontmatter name');
     assert.match(readFileSync(path.join(home, '.claude', 'skills', 'showmd', 'SKILL.md'), 'utf8'), /^name: showmd$/m);
+    const openaiMetadata = path.join(home, '.agents', 'skills', 'showmd', 'agents', 'openai.yaml');
+    assert.match(readFileSync(openaiMetadata, 'utf8'), /display_name: "ShowMD"/, 'canonical skill carries Codex UI metadata');
+    assert.equal(realpathSync.native(path.join(home, '.claude', 'skills', 'showmd')), path.dirname(path.dirname(openaiMetadata)),
+      'Claude Code and Codex-compatible metadata share one canonical skill directory');
     assert.match(state.stdout, /Claude Code/, 'stdout names the agent it reached');
-    console.log(`criterion PASS: install-skill exit 0, SKILL.md at ${canonical}, Claude Code linked`);
+    console.log(`criterion PASS: install-skill exit 0, SKILL.md and agents/openai.yaml at ${path.dirname(canonical)}, Claude Code linked`);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -30,6 +30,7 @@ for (const rel of shipped) {
 // Guard runtime assets referenced by path rather than require.
 const RUNTIME_FILES = [
   'skills/showmd/SKILL.md',
+  'skills/showmd/agents/openai.yaml',
   'icons/showmd.icns',
   'icons/showmd-doc.icns',
   'icons/showmd-helper.icns',

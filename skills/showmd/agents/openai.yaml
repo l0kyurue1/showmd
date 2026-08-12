@@ -1,0 +1,4 @@
+interface:
+  display_name: "ShowMD"
+  short_description: "Review and edit Markdown in an interactive preview"
+  default_prompt: "Use $showmd to open this Markdown in an interactive preview where I can review and edit it."
