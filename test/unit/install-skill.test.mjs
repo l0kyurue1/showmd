@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { installSkill, canonicalDir, SOURCE } = require('../../server/install-skill.js');
+const { installSkill, SOURCE } = require('../../server/install-skill.js');
 
 // the registry honours CLAUDE_CONFIG_DIR/CODEX_HOME/XDG_CONFIG_HOME; a
 // developer with those set would otherwise leak real dirs into these fixtures

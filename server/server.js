@@ -8,7 +8,6 @@ const proc = require('./proc.js');
 const { createDocumentStore, safeResolve, classifyRootTarget, isMarkdownFile } = require('./documents.js');
 const { defaultRevealFile, defaultOpenInfoWindow } = require('./reveal.js');
 const { createFolderPicker } = require('./folder-picker.js');
-const agentConfig = require('./agent-config.js');
 const settings = require('./settings.js');
 const ports = require('./ports.js');
 const { discoverRegistry } = require('./registry.js');
@@ -726,7 +725,7 @@ function createServer(root, {
           pid: body.pid,
           startedAt: body.startedAt,
         });
-      } catch (err) {
+      } catch {
         return sendJSON(res, 500, { error: 'handoff failed' });
       }
 
@@ -776,7 +775,7 @@ function createServer(root, {
       let picked;
       try {
         picked = await folderPicker.pick(mode, startDir);
-      } catch (err) {
+      } catch {
         return sendJSON(res, 500, { error: 'picker failed' });
       }
       if (picked === undefined) return sendJSON(res, 501, { error: 'picker unsupported on this platform' });
@@ -795,7 +794,7 @@ function createServer(root, {
       let result;
       try {
         result = await rootManager.add(dir);
-      } catch (err) {
+      } catch {
         return sendJSON(res, 400, { error: 'not a directory or does not exist' });
       }
       if (result.kind === 'promoted') {

@@ -88,8 +88,13 @@ export function parseRoot(css) {
     const name = m[1];
     const raw = m[2].trim();
     const ld = raw.match(/^light-dark\(\s*([^,]+),\s*([^)]+)\)$/);
-    if (ld) names.push(name), (out[name] = { light: ld[1].trim(), dark: ld[2].trim() });
-    else if (parseHex(raw)) names.push(name), (out[name] = { light: raw, dark: raw, single: true });
+    if (ld) {
+      names.push(name);
+      out[name] = { light: ld[1].trim(), dark: ld[2].trim() };
+    } else if (parseHex(raw)) {
+      names.push(name);
+      out[name] = { light: raw, dark: raw, single: true };
+    }
   }
   return { names, defaults: out };
 }

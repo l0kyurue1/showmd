@@ -82,7 +82,6 @@ const fname = document.getElementById('fname');
 const fnameTrack = fname.firstElementChild;
 const fnameSymlink = document.getElementById('fname-symlink');
 const revealBtn = document.getElementById('reveal-btn');
-const saveChip = document.getElementById('save-chip');
 const saveChipDot = document.getElementById('save-chip-dot');
 const saveChipText = document.getElementById('save-chip-text');
 const saveChipTip = document.getElementById('save-chip-tip');
