@@ -722,10 +722,16 @@ const settingsView = createSettingsView({
   isSettingsOpen: () => isSettingsOpen(viewState.view),
 });
 
+async function reopenSettingsInPlace() {
+  const scrollTop = main.scrollTop;
+  await settingsView.open();
+  main.scrollTop = scrollTop;
+}
+
 async function enterSettingsView() {
   if (isSourceView(viewState.view)) leaveSourceView();
   if (isLauncherOpen(viewState.view)) home.hideLauncher();
-  if (isSettingsOpen(viewState.view)) { await settingsView.open(); return; }
+  if (isSettingsOpen(viewState.view)) { await reopenSettingsInPlace(); return; }
   viewState.dispatch({ type: 'settings-open' });
   lastVisitedFile = state.file;
   stopMarquee(fname);
@@ -820,7 +826,7 @@ async function applyRootPromotion({ newRoot, scope }) {
     home.renderSwitcher();
     if (save.isDirty()) await save.flush();
     if (currentRoute.space === 'settings') {
-      await settingsView.open();
+      await reopenSettingsInPlace();
       return;
     }
     if (currentRoute.space === 'skills' || currentRoute.space === 'agents') {
@@ -1089,8 +1095,10 @@ function updateNavButtons() {
 // Apply parsed routes identically after pushState and popstate.
 async function applyRoute(route) {
   if (route && route.space === 'settings') {
+    const alreadyOpen = isSettingsOpen(viewState.view);
     currentRoute = { space: 'settings', rootKey: route.rootKey };
-    await enterSettingsView();
+    if (alreadyOpen) await settingsView.refreshRootScope();
+    else await enterSettingsView();
     return;
   }
   if (isSettingsOpen(viewState.view)) exitSettingsView();

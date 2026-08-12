@@ -48,8 +48,8 @@ export const SETTINGS_GROUPS = [
     title: 'Maintenance',
     rows: [
       { key: 'historyRoot', label: 'History folder', desc: 'Which open folder the history action below applies to.', control: 'select', options: [['', 'No folder']] },
-      { key: 'prune', label: 'Selected folder\'s history', desc: 'Remove saved edit history for the folder selected above.', control: 'action', buttonLabel: 'Prune…' },
-      { key: 'pruneAll', label: 'All saved histories', desc: 'Remove saved edit history for every folder you\'ve opened in showmd.', control: 'action', buttonLabel: 'Prune all…', danger: true },
+      { key: 'prune', label: 'Selected folder\'s history', desc: 'Remove saved edit history for the folder selected above.', control: 'action', buttonLabel: 'Prune' },
+      { key: 'pruneAll', label: 'All saved histories', desc: 'Remove saved edit history for every folder you\'ve opened in showmd.', control: 'action', buttonLabel: 'Prune all', danger: true },
       { key: 'resetAll', label: 'Reset all settings', desc: 'Restore every setting on this page to its default.', control: 'action', buttonLabel: 'Reset all' },
     ],
   },
@@ -253,14 +253,20 @@ export function createSettingsView({
   }
 
   async function runPrune(btn, statusEl, scope) {
+    const label = btn.textContent;
     btn.disabled = true;
-    statusEl.textContent = 'Removing…';
+    btn.textContent = 'Removing…';
+    statusEl.classList.remove('warning');
+    statusEl.textContent = '';
     try {
       const res = await api.prune(scope, getRootKey());
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       await refreshDerived();
-    } catch {
-      statusEl.textContent = 'Failed to remove history.';
+    } catch (err) {
+      statusEl.classList.add('warning');
+      statusEl.textContent = `Failed to remove history: ${err.message}`;
+      btn.textContent = label;
       btn.disabled = false;
     }
   }
@@ -773,5 +779,15 @@ export function createSettingsView({
     loadHistorySizes();
   }
 
-  return { open, renderCta, menuOpen: () => !!closeOpenMenu };
+  // The back link and the history rows are the only root-scoped parts of the page.
+  async function refreshRootScope() {
+    const backEl = root.querySelector('.settings-back');
+    if (backEl) backEl.textContent = backLabel();
+    const row = rowByKey('historyRoot');
+    const rowEl = root.querySelector('[data-key="historyRoot"]');
+    if (row && rowEl) setRowControlValue(rowEl, row, getRootKey() || '');
+    await refreshDerived();
+  }
+
+  return { open, renderCta, refreshRootScope, menuOpen: () => !!closeOpenMenu };
 }

@@ -257,7 +257,7 @@ function mount({
       json: async () => updateStates.shift() || { state: 'failure', manualCommand: 'npm i -g showmd-cli@latest' },
     }),
     registerMarkdown: async () => ({ ok: true, json: async () => ({}) }),
-    prune: async (scope) => { calls.prune.push(scope); return { ok: true }; },
+    prune: async (scope) => { calls.prune.push(scope); return { ok: true, json: async () => ({}) }; },
     restart: async () => ({ ok: true }),
     ping: async () => ({ ok: true }),
   };
