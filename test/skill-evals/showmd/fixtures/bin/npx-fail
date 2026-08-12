@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+printf '%s\n' "npx $*" >> "$SHOWMD_EVAL_LOG"
+printf '%s\n' 'simulated npm download failure' >&2
+exit 42

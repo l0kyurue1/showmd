@@ -31,3 +31,15 @@ jobs:
       # runs prepare, so client/dist/ exists before the pack guard and e2e tests
       - run: npm ci
       - run: npm test
+
+  skill-eval-preflight:
+    name: skill eval isolation / no model
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.228
+      - run: SHOWMD_EVAL_PREFLIGHT_ONLY=1 ./test/skill-evals/showmd/runners/codex.sh 1 '' '^(01|17|18|19)$'
+      - run: SHOWMD_EVAL_PREFLIGHT_ONLY=1 ./test/skill-evals/showmd/runners/claude.sh 1 '' '^(01|17|18|19)$'

@@ -1,0 +1,102 @@
+name: skill model evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider canaries to run
+        required: true
+        default: both
+        type: choice
+        options: [both, codex, claude]
+      codex_model:
+        description: OpenAI model for semantic and Codex canary evals
+        required: true
+        default: gpt-5.6-luna
+        type: string
+      claude_model:
+        description: Anthropic model for semantic and Claude canary evals
+        required: true
+        default: haiku
+        type: string
+      cases:
+        description: Full-agent canary case regex
+        required: true
+        default: '^(01|02|03|08|12|15|17|18|19)$'
+        type: string
+      trials:
+        description: Trials per semantic and full-agent case
+        required: true
+        default: 2
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-model-evals
+  cancel-in-progress: false
+
+jobs:
+  codex:
+    if: inputs.provider == 'both' || inputs.provider == 'codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SHOWMD_EVAL_CASES: ${{ inputs.cases }}
+      SHOWMD_EVAL_ARTIFACT_DIR: ${{ runner.temp }}/showmd-codex-evals
+      SHOWMD_EVAL_MAX_INPUT_TOKENS: '100000'
+      SHOWMD_EVAL_MAX_TOTAL_INPUT_TOKENS: '750000'
+      SHOWMD_EVAL_MIN_TRIAL_RESERVE_INPUT_TOKENS: '30000'
+      SHOWMD_EVAL_REQUIRE_USAGE: '1'
+      SHOWMD_EVAL_MODEL: ${{ inputs.codex_model }}
+      SHOWMD_EVAL_TRIALS: ${{ inputs.trials }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global @openai/codex@0.147.0
+      - name: description-only semantic eval
+        run: node test/skill-evals/showmd/run-semantic.mjs openai "$SHOWMD_EVAL_MODEL" "$SHOWMD_EVAL_TRIALS"
+      - name: Codex full-agent canary
+        run: ./test/skill-evals/showmd/runners/codex.sh "$SHOWMD_EVAL_TRIALS" "$SHOWMD_EVAL_MODEL" "$SHOWMD_EVAL_CASES"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: showmd-codex-eval-results
+          path: ${{ runner.temp }}/showmd-codex-evals
+          if-no-files-found: ignore
+
+  claude:
+    if: inputs.provider == 'both' || inputs.provider == 'claude'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SHOWMD_EVAL_CASES: ${{ inputs.cases }}
+      SHOWMD_EVAL_ARTIFACT_DIR: ${{ runner.temp }}/showmd-claude-evals
+      SHOWMD_EVAL_CLAUDE_MAX_BUDGET_USD: '0.25'
+      SHOWMD_EVAL_MAX_INPUT_TOKENS: '100000'
+      SHOWMD_EVAL_MAX_TOTAL_INPUT_TOKENS: '750000'
+      SHOWMD_EVAL_MIN_TRIAL_RESERVE_INPUT_TOKENS: '30000'
+      SHOWMD_EVAL_REQUIRE_USAGE: '1'
+      SHOWMD_EVAL_MODEL: ${{ inputs.claude_model }}
+      SHOWMD_EVAL_TRIALS: ${{ inputs.trials }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global @anthropic-ai/claude-code@2.1.228
+      - name: description-only semantic eval
+        run: node test/skill-evals/showmd/run-semantic.mjs anthropic "$SHOWMD_EVAL_MODEL" "$SHOWMD_EVAL_TRIALS"
+      - name: Claude full-agent canary
+        run: ./test/skill-evals/showmd/runners/claude.sh "$SHOWMD_EVAL_TRIALS" "$SHOWMD_EVAL_MODEL" "$SHOWMD_EVAL_CASES"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: showmd-claude-eval-results
+          path: ${{ runner.temp }}/showmd-claude-evals
+          if-no-files-found: ignore

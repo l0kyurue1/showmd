@@ -1,0 +1,19 @@
+01	invoke	(?:^|/)README\.md$	installed	-	Give me a rendered preview of README.md so I can inspect the document.
+02	invoke	(?:^|/)README\.md$	installed	-	I want to make changes to README.md myself in a proper Markdown editor.
+03	invoke	(?:^|/)README\.md$	installed	-	Present README.md in an artifact-like interface for review.
+04	invoke	(?:^|/)README\.md$	installed	-	Rewrite README.md as a short project brief, then give me an interactive preview so I can review it visually.
+05	invoke	(?:^|/)README\.md$	installed	-	Let me review and revise README.md while seeing its rendered result.
+06	invoke	\.md$	installed	-	Create a design brief in Markdown and present the result as a polished artifact I can review.
+07	invoke	(?:^|/)README\.md$	installed	-	Open README.md with ShowMD.
+08	invoke	^skills(?:\s|$)	installed	-	Let me browse my installed agent skills in a readable interface.
+09	invoke	^agents$	installed	-	Show me my agent configuration in a readable interface.
+10	quiet	-	installed	-	Read README.md and summarize it.
+11	quiet	-	installed	-	Check README.md for spelling mistakes.
+12	quiet	-	installed	-	Edit README.md to replace the heading with Project Notes.
+13	quiet	-	installed	-	Review every Markdown file in this repository and report problems.
+14	quiet	-	installed	-	Add an installation section to README.md and tell me when it is done.
+15	quiet	-	installed	-	Tell me whether README.md mentions browser support.
+16	quiet	-	installed	-	Paste the contents of README.md directly into this chat.
+17	invoke	^npx -y showmd-cli (?:.*\/)?README\.md$	missing	(?:not installed|isn't installed|is not installed|not available)	Give me a rendered preview of README.md so I can inspect the document; ShowMD is not installed globally.
+18	blocker	-	no-npx	(?:Node|npm|npx).*(?:missing|not installed|not available|unavailable|cannot|can't|command not found)	Give me a rendered preview of README.md. ShowMD is not installed, and this environment has no Node or npm tooling.
+19	blocker	^npx -y showmd-cli (?:.*\/)?README\.md$	failing-npx	(?:download|npx|npm).*(?:fail|error|unable|could not)	Give me a rendered preview of README.md. ShowMD is not installed; if the on-demand npm download fails, tell me what blocked the preview.

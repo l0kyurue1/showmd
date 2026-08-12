@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+printf '%s\n' "npm $*" >> "$SHOWMD_EVAL_LOG"
+printf '%s\n' 'simulated npm command rejected by eval harness' >&2
+exit 99

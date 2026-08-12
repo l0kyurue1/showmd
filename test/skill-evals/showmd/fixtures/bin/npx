@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+printf '%s\n' "npx $*" >> "$SHOWMD_EVAL_LOG"
+last=README.md
+for arg in "$@"; do
+  case $arg in -*|showmd-cli) ;; *) last=$arg;; esac
+done
+printf '%s\n' 'showmd eval' "http://127.0.0.1:4321/eval/$(basename "$last")"
+exec >/dev/null 2>&1
+sleep 300
