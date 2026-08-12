@@ -646,14 +646,15 @@ function createServer(root, {
       const { res, body } = ctx;
       const scope = body.scope || 'root';
       if (scope !== 'root' && scope !== 'all') return sendJSON(res, 400, { error: 'invalid scope' });
-      if (scope === 'all') {
-        await history.pruneAll();
-        return sendJSON(res, 200, { ok: true });
+      if (scope === 'root' && !body.rootKey) return sendJSON(res, 400, { error: 'rootKey required' });
+      const root = scope === 'root' ? rootScopedRootOr404(res, body.rootKey) : null;
+      if (scope === 'root' && !root) return;
+      try {
+        if (scope === 'all') await history.pruneAll();
+        else await history.prune(root.dir);
+      } catch (err) {
+        return sendJSON(res, 500, { error: err.message });
       }
-      if (!body.rootKey) return sendJSON(res, 400, { error: 'rootKey required' });
-      const root = rootScopedRootOr404(res, body.rootKey);
-      if (!root) return;
-      await history.prune(root.dir);
       return sendJSON(res, 200, { ok: true });
     } },
 

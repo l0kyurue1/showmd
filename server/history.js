@@ -47,6 +47,15 @@ async function realGitExec(prefixArgs, args, allowCodes, opts) {
   }
 }
 
+function realGitPipe(prefixA, argsA, prefixB, argsB, opts) {
+  const { env, ...rest } = opts || {};
+  return proc.pipeThrough(
+    { cmd: 'git', args: [...prefixA, ...argsA] },
+    { cmd: 'git', args: [...prefixB, ...argsB] },
+    { env: { ...gitEnv(), ...env }, ...rest },
+  );
+}
+
 // SHOWMD_HISTORY_HOME isolates the external history store in tests.
 function historyHome() {
   return process.env.SHOWMD_HISTORY_HOME || path.join(os.homedir(), '.local', 'share', 'showmd', 'history');
@@ -78,11 +87,6 @@ async function keyPath(root, relPath) {
 
 function relKeyFor(driveRoot, absPath) {
   return path.relative(driveRoot, absPath).split(path.sep).join('/');
-}
-
-function isUnderPrefix(relPath, prefixRel) {
-  if (prefixRel === '') return true;
-  return relPath === prefixRel || relPath.startsWith(`${prefixRel}/`);
 }
 
 function historyDirFor(anyPath) {
@@ -131,6 +135,8 @@ function createHistory(gitExec = realGitExec, options = {}) {
   function run(gitDir, workTree, args, allowCodes = [], extraOpts = {}) {
     return gitExec(['--git-dir', gitDir, '--work-tree', workTree], args, allowCodes, { cwd: workTree, ...extraOpts });
   }
+
+  const pipeGit = options.gitPipe || realGitPipe;
 
   /** @type {Promise<boolean> | null} */
   let gitAvailable = null;
@@ -473,12 +479,6 @@ function createHistory(gitExec = realGitExec, options = {}) {
   // Serialize prune with commits so git never runs against a removed repo.
   const rmRepo = (dir) => fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
-  async function listAllTrackedPaths(gitDir, driveRoot) {
-    const r = await run(gitDir, driveRoot, ['ls-tree', '-r', '--name-only', 'HEAD'], [128]);
-    if (r.code !== 0 || !r.stdout) return [];
-    return r.stdout.split('\n').filter(Boolean);
-  }
-
   async function listAllHistoricalPaths(gitDir, driveRoot) {
     const r = await run(gitDir, driveRoot, ['log', '--all', '--format=', '--name-only'], [128]);
     if (r.code !== 0 || !r.stdout) return [];
@@ -508,8 +508,22 @@ function createHistory(gitExec = realGitExec, options = {}) {
 
   async function commitAt(gitDir, driveRoot, subject, ts, marker) {
     const stamp = `${ts} +0000`;
-    const args = ['commit', ...(marker ? ['--allow-empty'] : []), '-m', subject, ...(marker ? ['-m', marker] : [])];
+    const args = ['commit', '--untracked-files=no', ...(marker ? ['--allow-empty'] : []), '-m', subject, ...(marker ? ['-m', marker] : [])];
     await run(gitDir, driveRoot, args, [], { env: { GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp } });
+  }
+
+  async function rebuildWithout(gitDir, tmpGitDir, driveRoot, prefixRel) {
+    if (prefixRel === '') return;
+    const result = await pipeGit(
+      ['--git-dir', gitDir, '--work-tree', driveRoot], ['fast-export', '--all', '--', '.', `:(exclude)${prefixRel}`],
+      ['--git-dir', tmpGitDir, '--work-tree', driveRoot], ['fast-import', '--quiet'],
+      { cwd: driveRoot },
+    );
+    if (result.leftCode !== 0) throw new Error(`cannot export history: ${result.leftStderr.trim() || `git fast-export exited ${result.leftCode}`}`);
+    if (result.rightCode !== 0) throw new Error(`cannot rebuild history: ${result.rightStderr.trim() || `git fast-import exited ${result.rightCode}`}`);
+    const branch = await run(tmpGitDir, driveRoot, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads'], [128]);
+    const ref = branch.code === 0 ? branch.stdout.trim() : '';
+    if (ref) await run(tmpGitDir, driveRoot, ['symbolic-ref', 'HEAD', ref]);
   }
 
   // Prune a folder by rebuilding the shared repo without its full timeline,
@@ -522,24 +536,20 @@ function createHistory(gitExec = realGitExec, options = {}) {
     if (!fs.existsSync(gitDir)) return gitDir;
     return withCrossProcessLock(gitDir, () => withGitLock(gitDir, async () => {
       const prefixRel = relKeyFor(driveRoot, absRoot);
-      const allPaths = await listAllTrackedPaths(gitDir, driveRoot);
-      const keep = allPaths.filter((p) => !isUnderPrefix(p, prefixRel));
       const tmpGitDir = `${gitDir}.rebuild-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-      await initRepoAt(tmpGitDir, driveRoot);
-      for (const storeRelPath of keep) {
-        const commits = await allCommitsOldestFirst(gitDir, driveRoot, storeRelPath);
-        for (const c of commits) {
-          const content = await run(gitDir, driveRoot, ['show', `${c.rev}:${storeRelPath}`], [128]);
-          if (content.code !== 0) continue;
-          await writeBlobInto(tmpGitDir, driveRoot, storeRelPath, content.stdout);
-          await commitAt(tmpGitDir, driveRoot, c.subject, c.ts);
-        }
+      let swapping = false;
+      try {
+        await initRepoAt(tmpGitDir, driveRoot);
+        await rebuildWithout(gitDir, tmpGitDir, driveRoot, prefixRel);
+        repoCache.delete(gitDir);
+        swapping = true;
+        await rmRepo(gitDir);
+        await fsp.rename(tmpGitDir, gitDir);
+        repoCache.set(gitDir, Promise.resolve(gitDir));
+        return gitDir;
+      } finally {
+        if (!swapping) await rmRepo(tmpGitDir).catch(() => {});
       }
-      repoCache.delete(gitDir);
-      await rmRepo(gitDir);
-      await fsp.rename(tmpGitDir, gitDir);
-      repoCache.set(gitDir, Promise.resolve(gitDir));
-      return gitDir;
     }));
   }
 
