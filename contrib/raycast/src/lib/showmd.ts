@@ -500,15 +500,11 @@ async function addRoot(
   target: string,
 ): Promise<string | null> {
   try {
-    const res = await fetchWithTimeout(
-      fetchImpl,
-      apiUrl(port, "/api/roots"),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: target }),
-      },
-    );
+    const res = await fetchWithTimeout(fetchImpl, apiUrl(port, "/api/roots"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: target }),
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as { url?: string };
     return typeof data.url === "string" ? data.url : null;
@@ -615,9 +611,7 @@ export function resolveBinary(
   // reuses the same rebuilt dir list rather than trusting process.env.PATH,
   // which is exactly what is missing under Raycast.
   for (const dir of dirs) {
-    const npxBin = windows
-      ? path.join(dir, "npx.cmd")
-      : path.join(dir, "npx");
+    const npxBin = windows ? path.join(dir, "npx.cmd") : path.join(dir, "npx");
     candidates.push({ command: npxBin, args: ["-y", "showmd-cli"] });
   }
 
@@ -1084,9 +1078,13 @@ async function postServerAction(
   action: "restart" | "shutdown",
 ): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(fetchImpl, apiUrl(port, `/api/${action}`), {
-      method: "POST",
-    });
+    const res = await fetchWithTimeout(
+      fetchImpl,
+      apiUrl(port, `/api/${action}`),
+      {
+        method: "POST",
+      },
+    );
     return res.ok;
   } catch {
     return false;

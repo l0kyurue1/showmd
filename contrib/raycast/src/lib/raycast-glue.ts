@@ -203,7 +203,8 @@ export async function stopShowmdServer(): Promise<boolean> {
     animatedTitle: "Stopping ShowMD…",
     action: async () => ({ ok: await stopServer(prefs) }),
     failTitle: "Could not stop ShowMD",
-    confirm: async () => !(await waitForServer(prefs, { want: "stopped" })).running,
+    confirm: async () =>
+      !(await waitForServer(prefs, { want: "stopped" })).running,
     successTitle: "ShowMD stopped",
     timeoutTitle: "ShowMD did not stop in time",
   });

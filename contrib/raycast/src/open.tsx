@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Icon,
+  List,
+  showToast,
+  Toast,
+} from "@raycast/api";
 import {
   deleteRecent,
   loadRecents,
