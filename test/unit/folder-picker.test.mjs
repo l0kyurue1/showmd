@@ -73,10 +73,21 @@ test('warm(): swallows every failure instead of throwing or rejecting', async ()
     copyFile: async () => { throw new Error('boom'); },
   };
   const picker = createFolderPicker({ platform: 'darwin', supportDir: '/fake/support', execFileP, fsp });
-  assert.doesNotThrow(() => picker.warm());
-  // warm() chains promises internally without returning them; give the
-  // rejected chain a tick to settle so an unhandled-rejection would surface
-  await new Promise((r) => setTimeout(r, 10));
+  // returns a settled promise so server shutdown can wait on the build chain
+  await assert.doesNotReject(() => picker.warm());
+});
+
+test('warm(): resolves within warmTimeoutMs even if the build chain hangs', async () => {
+  const execFileP = () => new Promise(() => {});
+  const fsp = {
+    readFile: async () => { throw new Error('ENOENT'); },
+    mkdir: async () => {},
+    rm: async () => {},
+    writeFile: async () => {},
+    copyFile: async () => {},
+  };
+  const picker = createFolderPicker({ platform: 'darwin', supportDir: '/fake/support', execFileP, fsp, warmTimeoutMs: 20 });
+  await picker.warm();
 });
 
 test('buildPickerAppletSource: branches the panel by pickMode, no setMessage anywhere', () => {

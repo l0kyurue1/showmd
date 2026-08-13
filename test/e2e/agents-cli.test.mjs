@@ -50,10 +50,16 @@ test.before(async () => {
   await waitForServer(`${BASE}/`);
 });
 
-test.after(async () => {
+async function stopChild() {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once('close', resolve));
   child.kill();
-  await new Promise((r) => setTimeout(r, 100));
-  rmSync(fakeHome, { recursive: true, force: true });
+  await closed;
+}
+
+test.after(async () => {
+  await stopChild();
+  rmSync(fakeHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 test('cli started, announced agent config', () => {
@@ -82,9 +88,7 @@ test('GET /api/agents/claude/tree returns the claude agent groups', async () => 
 });
 
 test('cli exits cleanly on kill', async () => {
-  const exited = new Promise((resolve) => child.once('exit', resolve));
-  child.kill();
-  await exited;
+  await stopChild();
   assert.equal(stderr, '', 'no stderr output during a normal run');
   console.log('criterion 3 PASS: cli exits cleanly on kill');
 });

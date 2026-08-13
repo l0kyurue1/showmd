@@ -250,7 +250,12 @@ function createServer(root, {
   updateOnVerifiedFn, updateInfoFn = updateCheck.updateInfo,
 } = {}) {
   const folderPicker = folderPickerFactory({ platform });
-  if (warmPickerOnStart && platform === 'darwin') folderPicker.warm();
+  // shutdown must wait for warm-up: osacompile keeps writing the helper
+  // bundle after the process is told to exit, racing external cleanup
+  const pickerWarm = (warmPickerOnStart && platform === 'darwin'
+    ? Promise.resolve(folderPicker.warm())
+    : Promise.resolve()
+  ).catch(() => {});
   // silent and once per boot: cheap because generation is local, safe because
   // selfHealApp only touches a bundle it can prove we built
   if (selfHealOnBoot) {
@@ -1033,6 +1038,7 @@ function createServer(root, {
     for (const res of sseClients) res.end();
     Promise.allSettled([
       announcePromise,
+      pickerWarm,
       recentsWrite,
       bootRootReady.then(() => Promise.all(rootManager.list().map((openRoot) => rootManager.remove(openRoot.key)))),
     ]).then(([announcement]) => {

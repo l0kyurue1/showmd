@@ -97,6 +97,7 @@ function createFolderPicker({
   // test-only seams: production never sets these, so pickViaApplet's real
   // wait is always the full 120s/100ms below
   timeoutMs = 120000,
+  warmTimeoutMs = 15000,
   pollMs = 100,
 } = {}) {
   const appDir = path.join(supportDir, 'ShowMD Helper.app');
@@ -134,11 +135,19 @@ function createFolderPicker({
     await fsp.writeFile(marker, PICKER_APP_VERSION);
   }
 
+  // capped: server shutdown awaits this promise, and the external tools in
+  // buildApp have no timeout of their own — a stuck osacompile/open must
+  // slow shutdown by at most warmTimeoutMs, never hang it
   function warm() {
-    ensureApp()
+    const chain = ensureApp()
       .then(() => fsp.rm(requestFile, { force: true }))
       .then(() => execFileP('open', ['-g', '-a', appDir]))
       .catch(() => {});
+    let capTimer;
+    const cap = new Promise((resolve) => {
+      capTimer = setTimeout(resolve, warmTimeoutMs);
+    });
+    return Promise.race([chain, cap]).finally(() => clearTimeout(capTimer));
   }
 
   async function pickViaApplet(mode, startDir) {
