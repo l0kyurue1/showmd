@@ -10,9 +10,10 @@ Linux, run `showmd install-app` (see the main [README](../README.md#desktop-app)
 | macOS, Windows (Raycast) | `raycast/` | A full Raycast extension: six commands, three AI tools, and a menu bar extra (macOS only). See its [README](raycast/README.md) |
 | Windows | `showmd.reg` | Double-click `showmd.reg`, accept the prompt, adds a "showmd" entry to the `.md` right-click menu (no admin required) |
 
-Both need `showmd` on `PATH` (`npm install -g showmd`). The Raycast extension
-also takes an explicit path in its ShowMD Path preference, and falls back to
-`npx -y showmd-cli` when it finds nothing.
+The `.reg` handler needs `showmd` on `PATH` (`npm install -g showmd-cli`).
+The Raycast extension finds an installed copy on its own, takes an explicit
+path in its ShowMD Path preference, and falls back to `npx -y showmd-cli`
+when it finds nothing.
 
 ## Homebrew
 

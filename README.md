@@ -7,7 +7,7 @@ Read and edit markdown in your browser.
 npx showmd-cli
 ```
 
-showmd serves a folder of markdown files to your browser: a rendered reading view with folder navigation, an inline editor that renders code, math, and diagrams as you type, a version history of every save, and a browser for the skills, instructions, and memory files your AI agents run on. It runs on localhost with a single runtime dependency, and nothing you write leaves your machine.
+showmd opens a folder of markdown files as readable pages in your browser: a rendered reading view with folder navigation, an inline editor that renders code, math, and diagrams as you type, and a version history of every save. It also shows the skills, instructions, and memory files your AI agents run on. Everything runs on localhost, and nothing you write leaves your machine.
 
 <img src="docs/media/screenshots/showmd-demo.gif">
 
