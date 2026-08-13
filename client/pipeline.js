@@ -66,6 +66,17 @@ function parseFrontmatter(text) {
   return { meta, body: lines.slice(end + 1).join('\n') };
 }
 
+function headingText(token) {
+  if (!token.children) return token.content;
+  return token.children.map((c) => headingText(c)).join('');
+}
+
+function slugifyHeading(text) {
+  return text.toLowerCase().trim()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-');
+}
+
 function computeOutline(text) {
   const outline = [];
   let inFence = false;
@@ -175,6 +186,22 @@ export function createPipeline(markdownit) {
   });
   md.renderer.rules.wikilink = (tokens, idx) => wikilinkHTML(tokens[idx].meta.target, tokens[idx].meta.alias);
 
+  md.core.ruler.push('heading_ids', (state) => {
+    const used = new Set();
+    const tokens = state.tokens;
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].type !== 'heading_open') continue;
+      const inline = tokens[i + 1];
+      if (!inline || inline.type !== 'inline') continue;
+      const base = slugifyHeading(headingText(inline)) || 'section';
+      let slug = base;
+      let suffix = 1;
+      while (used.has(slug)) slug = `${base}-${suffix++}`;
+      used.add(slug);
+      tokens[i].attrSet('id', slug);
+    }
+  });
+
   md.inline.ruler.before('html_inline', 'img_tag', (state, silent) => {
     if (state.src.charCodeAt(state.pos) !== 0x3C) return false;
     const m = IMG_TAG_RE.exec(state.src.slice(state.pos));
@@ -267,6 +294,9 @@ export function createPipeline(markdownit) {
   let assetUrl = null;
   function setAssetUrl(fn) { assetUrl = fn; }
 
+  let docHref = null;
+  function setDocHref(fn) { docHref = fn; }
+
   function resolveAssetSrc(src) {
     if (/^([a-z][a-z0-9+.-]*:)?\/\//i.test(src) || src.startsWith('data:') || src.startsWith('/')) return src;
     if (!docId || !assetUrl) return src;
@@ -309,9 +339,9 @@ export function createPipeline(markdownit) {
   function wikilinkHTML(target, alias) {
     const resolved = resolveWikilink(target);
     const text = md.utils.escapeHtml(alias);
-    return resolved
-      ? `<a href="#" class="wikilink" data-file="${md.utils.escapeHtml(resolved)}">${text}</a>`
-      : `<span class="wikilink-unresolved">${text}</span>`;
+    if (!resolved) return `<span class="wikilink-unresolved">${text}</span>`;
+    const href = (docHref && docHref(resolved)) || '#';
+    return `<a href="${md.utils.escapeHtml(href)}" class="wikilink" data-file="${md.utils.escapeHtml(resolved)}">${text}</a>`;
   }
 
   function propValueHTML(v) {
@@ -337,6 +367,7 @@ export function createPipeline(markdownit) {
     setTree,
     setDocId,
     setAssetUrl,
+    setDocHref,
     escapeHtml: (s) => md.utils.escapeHtml(s),
   };
 }

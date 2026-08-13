@@ -6,6 +6,7 @@ const DOTS_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" st
 export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronSvg, skillMetaHTML, renderProperties, refreshInfo }) {
   const collapsedHeadings = new Set();
   let currentText = '';
+  let rendering = Promise.resolve();
 
   function currentContent() {
     return currentText;
@@ -14,11 +15,16 @@ export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronS
   function renderDoc(text) {
     currentText = text;
     const { meta, body } = pipeline.parseFrontmatter(text);
-    blocks.renderDocumentInto(doc, body);
+    rendering = blocks.renderDocumentInto(doc, body);
     doc.insertAdjacentHTML('afterbegin', skillMetaHTML(meta));
     renderProperties(meta);
     enhanceDoc();
     refreshInfo(text);
+    return rendering;
+  }
+
+  function whenRendered() {
+    return rendering;
   }
 
   function toggleTaskAt(bodyLine, checked) {
@@ -82,5 +88,5 @@ export function createDocView({ doc, pipeline, blocks, save, getEditor, chevronS
     collapsedHeadings.clear();
   }
 
-  return { renderDoc, enhanceDoc, toggleTaskAt, resetCollapsedHeadings, currentContent };
+  return { renderDoc, whenRendered, enhanceDoc, toggleTaskAt, resetCollapsedHeadings, currentContent };
 }

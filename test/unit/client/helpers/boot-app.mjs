@@ -246,6 +246,8 @@ export async function bootApp({
   window.CSS = { escape: cssEscape };
   window.markdownit = markdownit;
   window.Element.prototype.scrollIntoView = window.Element.prototype.scrollIntoView || (() => {});
+  const printCalls = [];
+  window.print = () => printCalls.push(true);
 
   for (const [k, v] of Object.entries(localStorageSeed)) window.localStorage.setItem(k, v);
 
@@ -284,6 +286,7 @@ export async function bootApp({
     fetch: fetchFake,
     EventSource: EventSourceFake,
     matchMedia: matchMediaFake,
+    printCalls,
     errors,
     runDeferredTimers: timerControl.run,
     pendingDeferredTimers: timerControl.count,

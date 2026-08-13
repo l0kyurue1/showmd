@@ -387,7 +387,7 @@ header {
   padding: 0 14px; font-size: 13px; color: var(--muted); flex-shrink: 0;
 }
 header .fname {
-  color: var(--ink); min-width: 0; flex: 0 1 auto;
+  color: var(--ink); min-width: 0; flex: 0 1 auto; margin-right: 4px;
   white-space: nowrap; overflow: hidden;
 }
 .fname-track {
@@ -411,7 +411,7 @@ header .fname {
 }
 .chip .tip:empty { display: none; }
 .chip:hover .tip { opacity: 1; transform: translateX(calc(-50% + var(--shift))) translateY(0); transition-delay: .35s; }
-header .chip { margin-left: 8px; flex-shrink: 0; }
+header .chip { margin-left: 6px; flex-shrink: 0; }
 .chip-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex-shrink: 0;
   transition: background .3s var(--spring);
@@ -438,6 +438,8 @@ nav.collapsed ~ .col .nav-cluster { margin-left: 30px; }
 .icon-btn.disabled { opacity: .35; pointer-events: none; }
 .reveal-btn { opacity: 0; pointer-events: none; }
 body.has-file .reveal-btn { opacity: 1; pointer-events: auto; }
+.export-btn { opacity: 0; pointer-events: none; }
+body.has-file .export-btn { opacity: 1; pointer-events: auto; }
 
 /* Lift header buttons because their transforms trap tooltip z-indexes. */
 header .icon-btn, header .chip { z-index: 21; }
@@ -943,12 +945,18 @@ body.launcher-boot #launcher-view[hidden] { display: flex; }
 }
 
 @media print {
-  nav, .sidebar-resize, header, #toolbar, #panel, .theme-btn, .tip, #banner, .editor-host, .diff-view, .settings-view, .launcher-view, .code-copy { display: none !important; }
+  nav, .sidebar-resize, header, #toolbar, #panel, .theme-btn, .tip, #banner, .editor-host, .diff-view, .settings-view, .launcher-view, .code-copy, .logo { display: none !important; }
   body, main, .col { display: block; height: auto; overflow: visible; }
+  /* screen scroll padding and the first heading's gap would stack on top of the
+     page margin */
+  main { padding: 0; }
+  .doc > :first-child { margin-top: 0; }
   #doc [hidden] { display: block; }
   /* :root[data-theme="dark"] (line 53) outranks a bare :root, so both must be pinned to light */
   :root, :root[data-theme="dark"] { color-scheme: light; }
+  /* browsers skip backgrounds by default; keep code/callout/table fills */
+  #doc, #doc * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   @page { margin: 18mm 16mm; }
   h1, h2, h3 { break-after: avoid; }
-  pre, table, blockquote, .callout, .mermaid-diagram { break-inside: avoid; }
+  pre, table, blockquote, .callout, .mermaid-diagram, .doc img { break-inside: avoid; }
 }

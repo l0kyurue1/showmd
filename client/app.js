@@ -82,6 +82,7 @@ const fname = document.getElementById('fname');
 const fnameTrack = fname.firstElementChild;
 const fnameSymlink = document.getElementById('fname-symlink');
 const revealBtn = document.getElementById('reveal-btn');
+const exportBtn = document.getElementById('export-btn');
 const saveChipDot = document.getElementById('save-chip-dot');
 const saveChipText = document.getElementById('save-chip-text');
 const saveChipTip = document.getElementById('save-chip-tip');
@@ -362,7 +363,7 @@ async function setMode(mode) {
     cmEditor.setEdit(mode === 'edit');
     cmEditor.focus();
   } else {
-    docView.renderDoc(currentContent());
+    await docView.renderDoc(currentContent());
     viewState.dispatch({ type: 'mode', mode });
     if (save.isDirty()) save.flush();
   }
@@ -1185,6 +1186,7 @@ async function loadFile(file, preserveScroll) {
   state.file = file;
   pipeline.setDocId(file);
   pipeline.setAssetUrl(docs().assetUrl);
+  pipeline.setDocHref((f) => documentHrefs.get(f) || formatRouteContext({ space: 'root', rootKey: currentRoute.rootKey, scopePath: currentRoute.scopePath, documentPath: f }));
   if (nav.selected !== file) nav = nextNav(nav, { type: 'select', id: null });
   stopMarquee(fname);
   setFnameForFile(file);
@@ -1433,6 +1435,8 @@ revealBtn.addEventListener('click', async () => {
     setTimeout(() => save.setDirty(save.isDirty()), 2500);
   }
 });
+
+exportBtn.addEventListener('click', () => exportPdf());
 sourceBtn.addEventListener('click', () => setMode('source'));
 editBtn.addEventListener('click', () => setMode('edit'));
 readBtn.addEventListener('click', () => setMode('read'));
@@ -1511,11 +1515,9 @@ document.addEventListener('keydown', (e) => {
     searchInput.select();
     return;
   }
-  // read mode first, so ⌘P from the editor prints the rendered doc and not a
-  // blank page — the print stylesheet hides the editor surface
   if (key === 'p') {
     e.preventDefault();
-    setMode('read').then(() => window.print());
+    exportPdf();
     return;
   }
   if (cmEditor && editorHost.contains(document.activeElement)) return;
@@ -1609,6 +1611,47 @@ function setTheme(next, { persist = true } = {}) {
   else if (viewState.view.mode === 'read' && state.file) blocks.refreshThemeIn(doc);
 }
 window.showmdSetTheme = setTheme;
+
+let pendingPrintRestore = null;
+
+function finishExportPdf() {
+  if (!pendingPrintRestore) return;
+  const { prevTitle, prevMode } = pendingPrintRestore;
+  pendingPrintRestore = null;
+  document.title = prevTitle;
+  if (prevMode) setTheme(prevMode, { persist: false });
+}
+window.addEventListener('afterprint', finishExportPdf);
+
+window.addEventListener('beforeprint', () => {
+  for (const a of doc.querySelectorAll('a.wikilink[href]')) {
+    a.dataset.printHref = a.getAttribute('href');
+    if (a.dataset.file === state.file) a.setAttribute('href', '#doc');
+    else a.removeAttribute('href');
+  }
+});
+window.addEventListener('afterprint', () => {
+  for (const a of doc.querySelectorAll('a.wikilink[data-print-href]')) {
+    a.setAttribute('href', a.dataset.printHref);
+    delete a.dataset.printHref;
+  }
+});
+
+async function exportPdf() {
+  await setMode('read');
+  await docView.whenRendered();
+  const wasDark = resolveTheme(colorMode, THEME_MEDIA.matches) === 'dark';
+  const prevMode = wasDark ? colorMode : null;
+  if (wasDark) {
+    setTheme('light', { persist: false });
+    await blocks.refreshThemeIn(doc);
+  }
+  const prevTitle = document.title;
+  if (state.file) document.title = state.file.split('/').pop().replace(/\.(md|markdown)$/i, '');
+  pendingPrintRestore = { prevTitle, prevMode };
+  window.print();
+  finishExportPdf();
+}
 
 function applyFontPreset(preset) {
   document.documentElement.style.setProperty('--doc-font', (FONT_PRESETS[preset] || FONT_PRESETS.default).family);

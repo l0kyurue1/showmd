@@ -91,6 +91,12 @@ Colors are token-only: every visual value lives in the `:root` block of
 `client/app.css`, and `test/lint/css-guard.mjs` fails the build on an inlined hex. Use the
 `?lab` palette workbench for color work.
 
+The only exception is the print page counter: Chromium page-margin boxes do not
+reliably resolve custom properties and remap their colors during PDF output.
+`client/print.css` may use only the calibrated literal explicitly allowlisted by
+`test/lint/css-guard.mjs`; do not reuse it elsewhere or add new ones without
+verifying the generated PDF.
+
 Full rules, contrast targets, and the icon pipeline: **[docs/design.md](docs/design.md)**.
 
 ## Domain language
