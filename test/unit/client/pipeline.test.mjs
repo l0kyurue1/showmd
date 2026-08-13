@@ -75,6 +75,21 @@ test('wikilink rendering: resolved and unresolved', () => {
   assert.match(unresolved, /<span class="wikilink-unresolved">missing<\/span>/);
 });
 
+test('wikilink rendering: uses the injected docHref for real hrefs', () => {
+  const p = pipeline();
+  p.setTree(['target.md']);
+  p.setDocHref((file) => `/r/root/${file}`);
+  const html = p.render('[[target]]');
+  assert.match(html, /<a href="\/r\/root\/target\.md" class="wikilink" data-file="target\.md">target<\/a>/);
+});
+
+test('wikilink rendering: falls back to "#" when docHref is unset or returns nothing', () => {
+  const p = pipeline();
+  p.setTree(['target.md']);
+  p.setDocHref(() => null);
+  assert.match(p.render('[[target]]'), /<a href="#" class="wikilink"/);
+});
+
 test('renderPropValue: plain string escapes', () => {
   const html = pipeline().renderPropValue('<b>hi</b>');
   assert.equal(html, '&lt;b&gt;hi&lt;/b&gt;');
@@ -176,4 +191,36 @@ test('wrapper: unclosed opener stays escaped', () => {
 
 test('br tag: <br> becomes a line break', () => {
   assert.match(pipeline().render('a<br>b'), /a<br>\s*b/);
+});
+
+test('heading ids: slugified, lowercased, punctuation stripped', () => {
+  const html = pipeline().render('# Hello, World!\n\n## Foo Bar_Baz');
+  assert.match(html, /<h1 id="hello-world">/);
+  assert.match(html, /<h2 id="foo-barbaz">/);
+});
+
+test('heading ids: CJK characters preserved', () => {
+  const html = pipeline().render('# 你好 世界');
+  assert.match(html, /<h1 id="你好-世界">/);
+});
+
+test('heading ids: duplicates deduped with -1, -2', () => {
+  const html = pipeline().render('# Section\n\n## Section\n\n### Section');
+  assert.match(html, /<h1 id="section">/);
+  assert.match(html, /<h2 id="section-1">/);
+  assert.match(html, /<h3 id="section-2">/);
+});
+
+test('heading ids: generated suffixes cannot collide with explicit headings', () => {
+  const html = pipeline().render('# X\n\n## X\n\n### X-1');
+  assert.match(html, /<h1 id="x">/);
+  assert.match(html, /<h2 id="x-1">/);
+  assert.match(html, /<h3 id="x-1-1">/);
+});
+
+test('heading ids: counter resets per render call', () => {
+  const p = pipeline();
+  p.render('# Section\n\n## Section');
+  const html = p.render('# Section');
+  assert.match(html, /<h1 id="section">/);
 });

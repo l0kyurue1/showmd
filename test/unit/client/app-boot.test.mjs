@@ -26,6 +26,26 @@ test('app.js boots straight into a file when a root and tree are given', async (
   assert.equal(h.document.title, 'a.md');
 });
 
+test('Export PDF waits for Read Mode block rendering to finish before printing', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# Title\n\n```js\nconst ready = true;\n```' },
+  });
+
+  const highlighterScript = h.document.querySelector('script[src="/assets/dist/hljs.js"]');
+  assert.ok(highlighterScript, 'syntax highlighting must still be loading');
+
+  h.click(h.document.getElementById('export-btn'));
+  await Promise.resolve();
+  assert.equal(h.printCalls.length, 0, 'printing must wait for async block enhancement');
+
+  h.window.hljs = { highlightElement: () => {} };
+  highlighterScript.dispatchEvent(new h.window.Event('load'));
+  await h.waitFor(() => h.printCalls.length === 1);
+  assert.deepEqual(h.errors, []);
+});
+
 test('keyboard shortcuts wired at the bottom of app.js run without a ReferenceError', async (t) => {
   const h = await bootApp({
     root: { dir: '/tmp/proj', name: 'proj' },

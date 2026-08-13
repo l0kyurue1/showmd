@@ -5,18 +5,25 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\brgba?\([^)]*\)|\bhsla?\([^)]*\)/g;
 
+// Chromium page-margin boxes do not reliably resolve custom properties. Keep
+// their empirically calibrated literals explicit, narrow, and reviewable.
+const RAW_COLOR_EXCEPTIONS = new Map([
+  ['client/print.css', new Set(['#ffffff'])],
+]);
+
 const failures = [];
 
 function blankRoot(content) {
   return content.replace(/^:root\s*\{[\s\S]*?\n\}/m, (block) => block.replace(/[^\n]/g, ' '));
 }
 
-function scan(file, { skipRoot = false } = {}) {
+function scan(file, { skipRoot = false, allowedColors = new Set() } = {}) {
   const content = readFileSync(path.join(ROOT, file), 'utf8');
   const haystack = skipRoot ? blankRoot(content) : content;
   const lines = content.split('\n');
   let match;
   while ((match = COLOR_RE.exec(haystack))) {
+    if (allowedColors.has(match[0].toLowerCase())) continue;
     const line = haystack.slice(0, match.index).split('\n').length;
     failures.push(`${file}:${line}: ${lines[line - 1].trim()}`);
   }
@@ -24,6 +31,7 @@ function scan(file, { skipRoot = false } = {}) {
 
 scan('client/app.css', { skipRoot: true });
 scan('client/index.html');
+for (const [file, allowedColors] of RAW_COLOR_EXCEPTIONS) scan(file, { allowedColors });
 
 // Exclude the raw-value Theme Lab and generated/vendor subdirectories.
 const CLIENT_EXCLUDE = new Set(['theme-lab.js']);
