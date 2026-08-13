@@ -10,7 +10,13 @@ const frontmatter = skill.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
 
 if (!frontmatter) failures.push('SKILL.md must begin with YAML frontmatter');
 const name = frontmatter?.match(/^name:\s*(.+)$/m)?.[1];
-const description = frontmatter?.match(/^description:\s*(.+)$/m)?.[1];
+const descriptionSource = frontmatter?.match(/^description:\s*(.+)$/m)?.[1];
+let description;
+try {
+  description = JSON.parse(descriptionSource);
+} catch {
+  failures.push('SKILL.md frontmatter description must be a double-quoted YAML string');
+}
 if (name !== 'showmd') failures.push('SKILL.md frontmatter name must be showmd');
 if (!description) failures.push('SKILL.md frontmatter needs a one-line description');
 else if (description.length > 1024) failures.push(`SKILL.md description is ${description.length} characters; maximum is 1024`);

@@ -1,6 +1,6 @@
 ---
 name: showmd
-description: Use when the desired outcome is a user-facing Markdown preview or editor: the user wants to inspect rendered output, edit the document themselves, or receive it in an artifact-like interface. Also use for a user-facing interface for installed agent skills, agent configuration, or memory. Stay quiet when Markdown only needs internal agent work such as reading, checking, reviewing, or editing.
+description: "Use when the desired outcome is a user-facing Markdown preview or editor: the user wants to inspect rendered output, edit the document themselves, or receive it in an artifact-like interface. Also use for a user-facing interface for installed agent skills, agent configuration, or memory. Stay quiet when Markdown only needs internal agent work such as reading, checking, reviewing, or editing."
 ---
 
 # ShowMD
