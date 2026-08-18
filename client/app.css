@@ -5,6 +5,7 @@
   --ink: light-dark(#37352f, #d6d3ce);
   --muted: light-dark(#6b6a66, #9a978f);
   --faint: light-dark(#d4d1cb, #45433f);
+  --muted-faint: light-dark(#a09e99, #706d67);
   --logo: light-dark(#37352f, #d6d3ce);
   --control-border: light-dark(#918d85, #807d76);
   --accent: light-dark(#236cbd, #78b0f4);
@@ -30,6 +31,11 @@
   --serif: "New York", ui-serif, Georgia, "Times New Roman", serif;
   --doc-font: var(--sans);
   --spring: cubic-bezier(.3, 1.25, .4, 1);
+  --switcher-menu-gap: 8px;
+  --agent-status-size: 10px;
+  --agent-status-tracking: .5px;
+  --agent-status-padding: 4px 8px;
+  --agent-status-radius: 8px;
 
   --white: #fff;
   --mark-add: light-dark(#009e5d, #2abd75);
@@ -170,7 +176,7 @@ nav .rowtext-track {
 }
 nav li.marqueeing .rowtext-track { max-width: none; overflow: visible; text-overflow: clip; }
 nav .rowtext-dir { color: var(--faint); }
-nav li.on .rowtext-dir { color: color-mix(in srgb, var(--muted), var(--faint)); }
+nav li.on .rowtext-dir { color: var(--muted-faint); }
 
 nav li.kbd-on:not(.on)::before {
   content: ''; position: absolute; inset: 0; left: calc(var(--indent) - 6px); z-index: -1;
@@ -184,16 +190,16 @@ nav li.last-visited::after {
 nav .sec.kbd-on { background: var(--hover); color: var(--ink); }
 nav .sec {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 300;
-  color: color-mix(in srgb, var(--muted), var(--faint)); padding: 10px 10px 6px;
+  color: var(--muted-faint); padding: 10px 10px 6px;
   display: flex; align-items: center; gap: 5px; cursor: pointer; border-radius: 6px;
   transition: color .15s, background .15s;
 }
 nav .sec:first-child { margin-top: 2px; }
 nav .sec:hover { color: var(--ink); background: var(--hover); }
 nav .sec-label-prefix { color: var(--faint); transition: color .15s; }
-nav .sec-label-name { color: color-mix(in srgb, var(--muted), var(--faint)); transition: color .15s; }
+nav .sec-label-name { color: var(--muted-faint); transition: color .15s; }
 nav .sec:hover .sec-label-prefix {
-  color: color-mix(in srgb, var(--muted), var(--faint));
+  color: var(--muted-faint);
 }
 nav .sec:hover .sec-label-name { color: var(--ink); }
 nav .sec.sec-scope {
@@ -217,7 +223,7 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 .badge { text-transform: uppercase; letter-spacing: .02em; }
 .badge.chip { font-size: 9.5px; line-height: 1; padding: 4.5px 9px; }
 
-.root-switcher { position: relative; flex-shrink: 0; padding-bottom: 8px; }
+.root-switcher { position: relative; flex-shrink: 0; padding-bottom: var(--switcher-menu-gap); }
 .root-switcher-btn {
   width: 100%; display: flex; align-items: center; gap: 7px; height: 30px;
   padding: 0 8px; border: 1px solid transparent; background: none; border-radius: 7px; cursor: pointer;
@@ -262,24 +268,24 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 .root-switcher-recent-wrap { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
 .root-switcher-recent-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 300;
-  color: color-mix(in srgb, var(--muted), var(--faint)); padding: 6px 8px 4px;
+  color: var(--muted-faint); padding: 6px 8px 4px;
 }
-.root-switcher-recent-item {
+.switcher-menu-item {
   display: flex; align-items: center; gap: 4px; border-radius: 7px;
 }
-.root-switcher-recent-item:hover, .root-switcher-recent-item:focus-within { background: var(--hover); }
+.switcher-menu-item:hover, .switcher-menu-item:focus-within { background: var(--hover); }
 .root-switcher-recent-row {
   flex: 1; min-width: 0; display: block; height: 28px; padding: 0 8px; border: 1px solid transparent; background: none;
   border-radius: 7px; cursor: pointer; font-family: var(--sans); font-size: 12.5px;
   color: var(--muted); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.root-switcher-recent-item:hover .root-switcher-recent-row,
-.root-switcher-recent-item:focus-within .root-switcher-recent-row { color: var(--ink); }
+.switcher-menu-item:hover .root-switcher-recent-row,
+.switcher-menu-item:focus-within .root-switcher-recent-row { color: var(--ink); }
 /* the actions take a flex slot only on hover/focus, so the folder name never
    reflows to make room for buttons that are usually invisible */
 .root-switcher-recent-actions { display: none; align-items: center; gap: 2px; flex-shrink: 0; padding-right: 4px; }
-.root-switcher-recent-item:hover .root-switcher-recent-actions,
-.root-switcher-recent-item:focus-within .root-switcher-recent-actions { display: flex; }
+.switcher-menu-item:hover .root-switcher-recent-actions,
+.switcher-menu-item:focus-within .root-switcher-recent-actions { display: flex; }
 .root-switcher-recent-del {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; padding: 0; border: none; background: none;
@@ -288,8 +294,8 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 }
 .root-switcher-recent-del:hover { opacity: 1; background: var(--card); color: var(--ink); }
 
-/* Agent picker reuses root-switcher layout; the opaque row hides scrolling content. */
-.agent-switcher { margin-top: 8px; padding-bottom: 0px; }
+.agent-switcher { margin-top: var(--switcher-menu-gap); padding-bottom: 0; }
+.agent-switcher .root-switcher-menu { top: calc(100% + var(--switcher-menu-gap)); }
 .root-switcher-row {
   width: 100%; display: flex; align-items: center; height: 30px;
   background: var(--side);
@@ -301,8 +307,18 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
   cursor: pointer; transition: background .15s, color .15s;
 }
 .root-switcher-switch-btn:hover { background: var(--hover); color: var(--ink); }
-.agent-switcher-row.on { color: var(--accent); font-weight: 600; }
-.agent-switcher-row.dim, .agent-switcher-row:disabled { color: var(--faint); cursor: default; }
+.agent-switcher-row { display: flex; align-items: center; gap: 6px; }
+.agent-switcher-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agent-switcher-undetected {
+  flex: none; font-size: var(--agent-status-size); letter-spacing: var(--agent-status-tracking);
+  color: var(--muted); background: var(--hover);
+  padding: var(--agent-status-padding); border-radius: var(--agent-status-radius);
+}
+.agent-switcher-row.on,
+.switcher-menu-item:is(:hover, :focus-within) .agent-switcher-row.on { color: var(--accent); font-weight: 600; }
+.agent-switcher-row:disabled,
+.switcher-menu-item:hover .agent-switcher-row:disabled { color: var(--muted-faint); cursor: default; }
+.switcher-menu-item:has(> .agent-switcher-row:disabled):hover { background: none; }
 
 .nav-footer {
   flex-shrink: 0; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px;
@@ -637,7 +653,7 @@ aside.collapsed { width: 0; padding-left: 0; padding-right: 0; border-left-width
 .panel-tab.on { color: var(--ink); border-color: var(--accent); }
 .hist-header {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 300;
-  color: color-mix(in srgb, var(--muted), var(--faint)); padding: 2px 0 12px;
+  color: var(--muted-faint); padding: 2px 0 12px;
   display: flex; align-items: center; gap: 6px;
 }
 .hist-header[hidden] { display: none; }
@@ -659,7 +675,7 @@ aside.collapsed { width: 0; padding-left: 0; padding-right: 0; border-left-width
 .prop-row { margin-bottom: 10px; }
 .prop-key {
   font-size: 11px; font-weight: 300;
-  color: color-mix(in srgb, var(--muted), var(--faint)); margin-bottom: 2px;
+  color: var(--muted-faint); margin-bottom: 2px;
 }
 .prop-val { color: var(--ink); font-size: 13px; font-weight: 400; line-height: 1.5; }
 .prop-val a { color: var(--accent); text-decoration: none; }
@@ -899,7 +915,7 @@ body.launcher-boot #launcher-view[hidden] { display: flex; }
 @media (prefers-reduced-motion: reduce) { .launcher-logo:hover .logo-m { animation: none; } }
 .launcher-section-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 300;
-  color: color-mix(in srgb, var(--muted), var(--faint));
+  color: var(--muted-faint);
   display: flex; align-items: center; gap: 6px; padding: 0 10px 6px;
 }
 .launcher-section-label::after { content: ''; flex: 1; height: 1px; background: var(--line); }
@@ -930,11 +946,12 @@ body.launcher-boot #launcher-view[hidden] { display: flex; }
 .launcher-row[data-kind="recent"]:hover .launcher-row-delete { display: flex; }
 .launcher-row-delete:hover { opacity: 1; background: var(--hover); color: var(--ink); }
 .launcher-error { padding: 0 10px; font-size: 12.5px; color: var(--del); }
+.launcher-error--info { color: var(--muted); }
 .launcher-foot-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
 .launcher-foot { display: flex; justify-content: center; gap: 18px; font-size: 12px; color: var(--muted); }
 .launcher-about {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; color: color-mix(in srgb, var(--muted), var(--faint)); text-decoration: none;
+  font-size: 12px; color: var(--muted-faint); text-decoration: none;
   transition: color .15s;
 }
 .launcher-about:hover { color: var(--ink); }

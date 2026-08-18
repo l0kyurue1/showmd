@@ -395,7 +395,8 @@ if (process.argv[2] === 'agents') {
     const { args } = parseArgs(process.argv.slice(3), stored.port);
     require('../server/update-check.js').checkUpdate({ enabled: stored.updateCheck });
     const server = createServer(null, { warmPickerOnStart: true, selfHealOnBoot: true });
-    serve(server, args, 'agents/claude/', () => 'showmd serving agent config', stored.browser);
+    const { pickDefaultAgentKey } = require('../server/agent-config.js');
+    serve(server, args, `agents/${pickDefaultAgentKey()}/`, () => 'showmd serving agent config', stored.browser);
   })();
   return;
 }

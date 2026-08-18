@@ -176,7 +176,7 @@ export async function bootApp({
   tree = [], root = null, settings = {}, settingsResponse = null, files = {}, rawOverrides = {},
   userAgent, systemDark = false, localStorageSeed = {},
   route, roots, routeError, skillsTree = null, skillFiles = {}, agentTree = null, agentFiles = {},
-  deferredTimeouts = [],
+  recents, deferredTimeouts = [],
 } = {}) {
   bootCount += 1;
   // Synthesize a fixed Root Space for legacy root-only fixtures.
@@ -189,6 +189,7 @@ export async function bootApp({
   const bootData = { root, roots: resolvedRoots };
   if (resolvedRoute) bootData.route = resolvedRoute;
   if (routeError) bootData.routeError = routeError;
+  if (recents !== undefined) bootData.recents = recents;
   const html = INDEX_HTML.replace(
     '<script type="module"',
     `<script type="application/json" id="boot-data">${JSON.stringify(bootData)}</script>\n<script type="module"`

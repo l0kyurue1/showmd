@@ -9,7 +9,7 @@ import { createDocView } from './doc-view.js';
 import { createSaveFlow } from './save-flow.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
 import { followRestart } from './restart-follow.js';
-import { createHomeView } from './home-view.js';
+import { createHomeView, SKILLS_EMPTY_NOTICE, AGENTS_EMPTY_NOTICE } from './home-view.js';
 import * as api from './api.js';
 import { parseRouteContext, formatRouteContext } from './route.js';
 
@@ -536,7 +536,7 @@ const home = createHomeView({
   getBackLabel: () => (currentRoute.rootKey && rootInfo && rootInfo.name ? rootInfo.name : 'Home'),
   getTreeLength: () => state.tree.length,
   getPanelOpen: () => !panelClosed(), setPanel,
-  openSkills, openAgentConfig, openSettings,
+  openSkills, openAgentConfig, openSettings, fetchAgentTree,
   navigateTo,
 });
 
@@ -556,6 +556,21 @@ function openAgentConfig(agentKey = 'claude') {
     : { space: 'agents', agentKey });
 }
 
+// probes an agent's tree without navigating, so the launcher can pick the
+// first agent with content before committing to a route
+async function fetchAgentTree(agentKey) {
+  const route = currentRoute.rootKey
+    ? { space: 'agents', agentKey, rootKey: currentRoute.rootKey }
+    : { space: 'agents', agentKey };
+  try {
+    const res = await api.documentApi(route).tree();
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 // Exit to the current root or Home; fresh tabs may have no browser history.
 function homeOrCurrentRoot() {
   return currentRoute.rootKey && findRootSummary(currentRoute.rootKey)
@@ -569,7 +584,6 @@ function leaveSpace() {
 
 async function enterSkillsView() {
   if (isSettingsOpen(viewState.view)) exitSettingsView();
-  home.hideLauncher();
   navBody.replaceChildren();
   const loading = document.createElement('div');
   loading.className = 'nav-empty';
@@ -585,6 +599,9 @@ async function enterSkillsView() {
     loading.textContent = 'Could not load skills.';
     return false;
   }
+  // an empty catalog leaves the launcher (if open) untouched, so browseSpace
+  // can show its notice without a sidebar flash
+  if (state.tree.length) home.hideLauncher();
   home.renderSwitcher();
   return true;
 }
@@ -620,17 +637,28 @@ function renderAgentSwitcherMenu(agents) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'root-switcher-recent-row agent-switcher-row';
-    row.textContent = a.displayName;
+    const name = document.createElement('span');
+    name.className = 'agent-switcher-name';
+    name.textContent = a.displayName;
+    row.appendChild(name);
     row.disabled = !a.detected;
     if (a.key === currentRoute.agentKey) row.classList.add('on');
-    if (!a.detected) { row.title = `${a.displayName} not detected on this machine`; row.classList.add('dim'); }
+    if (!a.detected) {
+      const notDetected = document.createElement('span');
+      notDetected.className = 'agent-switcher-undetected';
+      notDetected.textContent = 'not detected';
+      row.appendChild(notDetected);
+    }
     row.addEventListener('click', () => {
       closeAgentSwitcherMenu();
       if (a.key === currentRoute.agentKey) return;
       nav = nextNav(nav, { type: 'reset' });
       openAgentConfig(a.key);
     });
-    agentSwitcherMenu.appendChild(row);
+    const item = document.createElement('div');
+    item.className = 'switcher-menu-item';
+    item.appendChild(row);
+    agentSwitcherMenu.appendChild(item);
   }
 }
 
@@ -653,7 +681,6 @@ agentSwitcherBtn.addEventListener('click', () => {
 // Instructions is what someone opening agent config almost always came for.
 async function enterAgentConfigView() {
   if (isSettingsOpen(viewState.view)) exitSettingsView();
-  home.hideLauncher();
   const agentKey = currentRoute.agentKey;
   navBody.replaceChildren();
   const loading = document.createElement('div');
@@ -677,6 +704,7 @@ async function enterAgentConfigView() {
     loading.textContent = 'Could not load agent config.';
     return false;
   }
+  if (state.tree.length) home.hideLauncher();
   home.renderSwitcher();
   return preferred;
 }
@@ -1044,12 +1072,14 @@ function makeAgentProjectItem(row) {
   return { el: li, contentEl: inner.firstElementChild, onClick: () => navigate(row.id) };
 }
 
-function renderNoMatches() {
+function renderNavEmpty(text) {
   const empty = document.createElement('div');
   empty.className = 'nav-empty';
-  empty.textContent = 'No matches';
+  empty.textContent = text;
   navBody.appendChild(empty);
 }
+
+const EMPTY_CATALOG_NOTICE = { skills: SKILLS_EMPTY_NOTICE, agents: AGENTS_EMPTY_NOTICE };
 
 const HEADER_VARIANT = { scope: 'sec-scope', group: 'sec-group', dir: undefined };
 const ITEM_MAKER = { skill: makeSkillItem, project: makeAgentProjectItem };
@@ -1078,7 +1108,10 @@ function paintRows(rows) {
 function renderSidebar() {
   nav = nextNav(nav, { type: 'sync-rows' }, { model: state.navigation, file: state.file, hideFile: isSettingsOpen(viewState.view) });
   navBody.replaceChildren();
-  if (nav.query && nav.rows.length === 0) return renderNoMatches();
+  if (nav.rows.length === 0) {
+    if (nav.query) return renderNavEmpty('No matches');
+    if (EMPTY_CATALOG_NOTICE[state.navigationKind]) return renderNavEmpty(EMPTY_CATALOG_NOTICE[state.navigationKind]);
+  }
   paintRows(nav.rows);
   // selection lives in state, so it survives the markup being thrown away
   const selectedEl = navItemFor(nav.selected);

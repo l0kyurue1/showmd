@@ -224,3 +224,39 @@ test('getAgentTree: caches per (agent, cwd) within the TTL, rebuilds after it or
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('pickDefaultAgentKey: empty HOME falls back to claude', () => {
+  const home = tmp('showmd-agent-home-');
+  try {
+    const { pickDefaultAgentKey } = require('../../server/agent-config.js');
+    assert.equal(pickDefaultAgentKey({ home }), 'claude');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pickDefaultAgentKey: only Codex config present -> picks codex', () => {
+  const home = tmp('showmd-agent-home-');
+  try {
+    mkdirSync(path.join(home, '.codex'), { recursive: true });
+    writeFileSync(path.join(home, '.codex', 'AGENTS.md'), '# codex\n');
+    const { pickDefaultAgentKey } = require('../../server/agent-config.js');
+    assert.equal(pickDefaultAgentKey({ home }), 'codex');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('pickDefaultAgentKey: Claude config present -> picks claude even if Codex also has config', () => {
+  const home = tmp('showmd-agent-home-');
+  try {
+    mkdirSync(path.join(home, '.claude'), { recursive: true });
+    writeFileSync(path.join(home, '.claude', 'CLAUDE.md'), '# claude\n');
+    mkdirSync(path.join(home, '.codex'), { recursive: true });
+    writeFileSync(path.join(home, '.codex', 'AGENTS.md'), '# codex\n');
+    const { pickDefaultAgentKey } = require('../../server/agent-config.js');
+    assert.equal(pickDefaultAgentKey({ home }), 'claude');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

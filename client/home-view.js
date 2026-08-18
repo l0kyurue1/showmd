@@ -1,8 +1,11 @@
 import { isLauncherOpen, isSourceView } from './view-state.js';
 import { parseRouteContext } from './route.js';
 import { confirmDialog as defaultConfirmDialog } from './confirm-dialog.js';
+import { pickAgentWithContent } from './agent-picker.js';
 
 const RECENT_MAX = 5;
+export const SKILLS_EMPTY_NOTICE = 'No skills installed yet. Add one under ~/.claude/skills, or run showmd skills <dir> to browse a project.';
+export const AGENTS_EMPTY_NOTICE = 'No agent config found. ShowMD looks for ~/.claude/CLAUDE.md, ~/.claude/rules/ and ~/.codex/AGENTS.md.';
 
 export function createHomeView({
   api, bootData, isMac, svg,
@@ -12,7 +15,7 @@ export function createHomeView({
   viewState,
   getRootInfo, getBackLabel, getTreeLength,
   getPanelOpen, setPanel,
-  openSkills, openAgentConfig, openSettings,
+  openSkills, openAgentConfig, openSettings, fetchAgentTree,
   navigateTo,
   confirmDialog = defaultConfirmDialog,
 }) {
@@ -112,7 +115,7 @@ export function createHomeView({
     for (const { path: dir } of list) {
       const liveRoot = roots.find((r) => r.dir === dir);
       const item = document.createElement('div');
-      item.className = 'root-switcher-recent-item';
+      item.className = 'switcher-menu-item';
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'root-switcher-recent-row';
@@ -199,7 +202,7 @@ export function createHomeView({
     switcherEl.hidden = rootless && !backMode;
     switcherEl.classList.toggle('back-mode', backMode);
     switcherIconEl.innerHTML = backMode ? svg.arrowLeft : svg.folder;
-    switcherNameEl.textContent = backMode ? `Back to ${getBackLabel()}` : rootInfo.name;
+    switcherNameEl.textContent = backMode ? `Back to ${getBackLabel()}` : (rootInfo?.name || '');
     switcherChevronEl.hidden = backMode;
     agentSwitcherEl.hidden = view.source !== 'agents';
     renderNavFooterNarrow();
@@ -269,10 +272,11 @@ export function createHomeView({
     }
   }
 
-  function showLauncherNotice(text, { sticky = false } = {}) {
+  function showLauncherNotice(text, { sticky = false, tone } = {}) {
     clearTimeout(launcherNoticeTimer);
     launcherErrorEl.textContent = text;
     launcherErrorEl.hidden = false;
+    launcherErrorEl.classList.toggle('launcher-error--info', tone === 'info');
     if (!sticky) launcherNoticeTimer = setTimeout(() => { launcherErrorEl.hidden = true; }, 3000);
   }
 
@@ -281,6 +285,7 @@ export function createHomeView({
   function clearLauncherNotice() {
     clearTimeout(launcherNoticeTimer);
     launcherErrorEl.hidden = true;
+    launcherErrorEl.classList.remove('launcher-error--info');
   }
 
   function launcherRowEls() {
@@ -340,20 +345,26 @@ export function createHomeView({
   }
 
   // the space reports its own load failure in the sidebar; an empty catalog is
-  // the case only the launcher can explain
+  // the case only the launcher can explain. The launcher itself was left open
+  // by the space's own entry function, so there is nothing to restore here.
   function browseSpace(open, source, emptyNotice) {
     launcherSidebarWasCollapsed = false;
     return open().then(() => {
-      if (!getTreeLength() && viewState.view.source === source) { showLauncher(); showLauncherNotice(emptyNotice, { sticky: true }); }
+      if (!getTreeLength() && viewState.view.source === source) showLauncherNotice(emptyNotice, { sticky: true, tone: 'info' });
     });
   }
 
   function launcherBrowseSkills() {
-    return browseSpace(openSkills, 'skills', 'No skills found.');
+    return browseSpace(openSkills, 'skills', SKILLS_EMPTY_NOTICE);
   }
 
-  function launcherBrowseAgentConfig() {
-    return browseSpace(openAgentConfig, 'agents', 'No agent config found.');
+  // probes each detected agent's tree before navigating so an empty one is
+  // never briefly shown (that would flash the sidebar back open and closed)
+  async function launcherBrowseAgentConfig() {
+    launcherSidebarWasCollapsed = false;
+    const picked = await pickAgentWithContent('claude', fetchAgentTree);
+    if (picked) { await openAgentConfig(picked.key); return; }
+    showLauncherNotice(AGENTS_EMPTY_NOTICE, { sticky: true, tone: 'info' });
   }
 
   function activateLauncherRow(el) {

@@ -590,6 +590,33 @@ test('opening a different folder from an already-open root loads that folder\'s 
   assert.deepEqual(h.errors, []);
 });
 
+test('opening a Recent from rootless Skills reaches the root on the first click', async () => {
+  const h = await bootApp({
+    route: { space: 'skills', selection: 'global' },
+    roots: [],
+    recents: [{ path: '/tmp/proj/README.md', kind: 'file' }],
+    skillsTree: { scopes: [] },
+    tree: ['README.md'],
+    files: { 'README.md': '# Read me' },
+  });
+  h.fetch.on('POST', '/api/roots', () => ({
+    body: {
+      root: { key: KEY, dir: '/tmp/proj', name: 'proj', url: `/r/${KEY}/` },
+      scope: { rootKey: KEY, scopePath: '' },
+      url: `/r/${KEY}/README.md`,
+    },
+  }));
+
+  const recent = h.document.querySelector('[data-kind="recent"]');
+  assert.ok(recent, 'the rootless Skills Home shows Recents');
+  h.click(recent);
+
+  await h.waitFor(() => h.window.location.pathname === `/r/${KEY}/README.md`);
+  assert.equal(h.document.title, 'README.md');
+  assert.equal(h.document.getElementById('launcher-error').hidden, true);
+  assert.deepEqual(h.errors, []);
+});
+
 // --- root-removed SSE (forgetting a folder) ---
 
 test('a root-removed SSE event for this tab\'s root lands on plain Home with the sticky notice, without refetching the tree', async () => {
@@ -1017,4 +1044,20 @@ test('clicking a skill uses the href the server emitted, not a client-built URL'
   await h.waitFor(() => h.window.location.search === '?scope=all');
   assert.equal(h.window.location.pathname, '/skills/agents/demo/SKILL.md');
   assert.deepEqual(h.errors, []);
+});
+
+test('a direct URL into an empty skills or agents catalog names the empty state in the sidebar', async () => {
+  const skills = await bootApp({
+    route: { space: 'skills', selection: 'global' },
+    skillsTree: { scopes: [] },
+  });
+  await skills.waitFor(() => skills.document.querySelector('.nav-body .nav-empty')?.textContent.startsWith('No skills installed yet'));
+  assert.deepEqual(skills.errors, []);
+
+  const agents = await bootApp({
+    route: { space: 'agents', agentKey: 'claude' },
+    agentTree: { agent: 'claude', displayName: 'Claude', detected: false, agents: [], groups: [], roots: [] },
+  });
+  await agents.waitFor(() => agents.document.querySelector('.nav-body .nav-empty')?.textContent.startsWith('No agent config found'));
+  assert.deepEqual(agents.errors, []);
 });

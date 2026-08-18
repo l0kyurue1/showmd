@@ -159,6 +159,20 @@ function buildAgentTree(agentKey, { home = os.homedir(), cwd } = {}) {
   };
 }
 
+// Picks the first agent (in AGENTS order) with any config to show, so a
+// Codex-only machine lands on Codex instead of an empty Claude tree.
+/**
+ * @param {import('../types/showmd').AgentTreeOptions} [opts]
+ */
+function pickDefaultAgentKey({ home = os.homedir(), cwd } = {}) {
+  for (const agent of AGENTS) {
+    if (!agent.key) continue;
+    const tree = buildAgentTree(agent.key, { home, cwd });
+    if (tree && tree.groups.length) return agent.key;
+  }
+  return 'claude';
+}
+
 // this view is only ever showing one agent for one cwd at a time.
 const treeCache = createTreeCache();
 
@@ -186,4 +200,4 @@ function agentKeyForId(id) {
   return agent ? agent.key : null;
 }
 
-module.exports = { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId, projectSlug };
+module.exports = { AGENTS, buildAgentTree, getAgentTree, invalidate, agentKeyForId, projectSlug, pickDefaultAgentKey };

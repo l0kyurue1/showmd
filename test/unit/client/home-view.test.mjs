@@ -14,6 +14,7 @@ function mount({
   recents = [], root = { dir: null, name: null }, recentsOk = true, deleteRecentOk = true, roots = [],
   addRootResult = null, listRootsOk = true, pickFolderResult = null,
   removeRootResult = null, confirmChoice = 'confirm',
+  treeLength = 0, fetchAgentTreeImpl = async () => null,
 } = {}) {
   document.body.innerHTML = `
     <div id="sidebar"></div>
@@ -39,6 +40,7 @@ function mount({
     dispatch(event) {
       if (event.type === 'launcher-open') view = { ...view, overlay: 'launcher' };
       else if (event.type === 'launcher-close') view = { ...view, overlay: null };
+      else if (event.type === 'source') view = { ...view, source: event.source };
       calls.applyView++;
       return view;
     },
@@ -47,6 +49,12 @@ function mount({
   let returnTo = 'files';
   let panelOpen = false;
   let recentsList = recents.slice();
+  let treeLen = treeLength;
+  const openSkills = async () => { view = { ...view, source: 'skills' }; };
+  const openAgentConfig = async (agentKey = 'claude') => {
+    view = { ...view, source: 'agents' };
+    calls.navigateTo.push({ space: 'agents', agentKey });
+  };
   const api = {
     recents: async () => (recentsOk ? { ok: true, json: async () => ({ recents: recentsList }) } : { ok: false }),
     deleteRecent: async (path) => {
@@ -100,8 +108,12 @@ function mount({
     getRootInfo: () => rootInfo,
     getReturnTo: () => returnTo,
     setReturnTo: (v) => { returnTo = v; },
+    getBackLabel: () => 'Home',
+    getTreeLength: () => treeLen,
     getPanelOpen: () => panelOpen,
     setPanel: (open) => { panelOpen = open; },
+    openSkills, openAgentConfig, openSettings: async () => {},
+    fetchAgentTree: (agentKey) => fetchAgentTreeImpl(agentKey),
     enterSkillsView: async () => { calls.enterSkills++; return true; },
     enterAgentConfigView: async () => { calls.enterAgentConfig++; return true; },
     enterSettingsView: async () => { calls.enterSettings++; },
@@ -114,6 +126,7 @@ function mount({
     getView: () => view,
     setPanelOpen: (v) => { panelOpen = v; },
     getPanelOpen: () => panelOpen,
+    setTreeLength: (n) => { treeLen = n; },
   };
 }
 
@@ -177,7 +190,7 @@ test('the switcher is Recents-driven: no "Open roots" section, and every row sho
   assert.equal(home.switcherEl.textContent.includes('Open roots'), false);
   assert.equal(home.switcherEl.querySelector('.root-switcher-roots-wrap'), null);
 
-  const rows = Array.from(home.switcherEl.querySelectorAll('.root-switcher-recent-item'));
+  const rows = Array.from(home.switcherEl.querySelectorAll('.switcher-menu-item'));
   assert.equal(rows.length, 3);
   for (const row of rows) {
     assert.equal(row.querySelector('.root-switcher-recent-badge'), null, 'the Open badge is gone');
@@ -203,7 +216,7 @@ test('X on a Recents row that is a live root: confirms once with the new copy, t
   assert.equal(calls.confirmDialog[0].confirmLabel, 'Forget folder');
   assert.deepEqual(calls.removeRoot, ['r_other']);
   assert.deepEqual(calls.navigateTo, [], 'forgetting another root must not navigate this tab away');
-  assert.equal(home.switcherEl.querySelectorAll('.root-switcher-recent-item').length, 0, 'the recent entry is gone too');
+  assert.equal(home.switcherEl.querySelectorAll('.switcher-menu-item').length, 0, 'the recent entry is gone too');
 });
 
 test('X on a live root: canceling the confirmation makes no DELETE call at all', async () => {
@@ -229,7 +242,7 @@ test('X on a live root: a failed root DELETE notifies instead of dropping the ro
   const notice = home.switcherEl.querySelector('.root-switcher-notice');
   assert.equal(notice.hidden, false);
   assert.equal(notice.textContent, 'Could not forget that folder.');
-  assert.equal(home.switcherEl.querySelectorAll('.root-switcher-recent-item').length, 1, 'the row survives a failed close');
+  assert.equal(home.switcherEl.querySelectorAll('.switcher-menu-item').length, 1, 'the row survives a failed close');
 });
 
 test('X on a Recents row that is NOT a live root: deletes immediately, no dialog, no root-removal call', async () => {
@@ -242,7 +255,7 @@ test('X on a Recents row that is NOT a live root: deletes immediately, no dialog
 
   assert.deepEqual(calls.confirmDialog, [], 'a non-live row never shows the dialog');
   assert.deepEqual(calls.removeRoot, [], 'a non-live row never touches the root-removal endpoint');
-  assert.equal(home.switcherEl.querySelectorAll('.root-switcher-recent-item').length, 0, 'the history entry is gone');
+  assert.equal(home.switcherEl.querySelectorAll('.switcher-menu-item').length, 0, 'the history entry is gone');
 });
 
 test('showLauncher opens the pane and collapses the sidebar, hideLauncher restores it', () => {
@@ -356,4 +369,73 @@ test('deleteRecent: a successful delete removes the row with no notice', async (
 
   assert.equal(document.getElementById('launcher-error').hidden, true);
   assert.equal(document.querySelectorAll('.launcher-row-delete').length, 0);
+});
+
+// --- empty-catalog notices: neutral tone, no launcher flash ---
+
+test('launcherBrowseSkills: an empty tree leaves the launcher open (no hide/show flash) and shows the info notice', async () => {
+  const { home, calls } = mount({ treeLength: 0 });
+  home.showLauncher();
+  await tick();
+  const sidebar = document.getElementById('sidebar');
+  assert.equal(sidebar.classList.contains('collapsed'), true);
+  const closeCallsBefore = calls.applyView;
+
+  await home.launcherBrowseSkills();
+
+  assert.equal(sidebar.classList.contains('collapsed'), true, 'sidebar stays collapsed the whole time, no flash');
+  assert.equal(calls.applyView, closeCallsBefore, 'launcher-close/-open never dispatched for an empty catalog');
+  const launcherError = document.getElementById('launcher-error');
+  assert.equal(launcherError.hidden, false);
+  assert.equal(launcherError.classList.contains('launcher-error--info'), true);
+  assert.equal(launcherError.textContent, 'No skills installed yet. Add one under ~/.claude/skills, or run showmd skills <dir> to browse a project.');
+});
+
+test('a failure notice shown after an info notice does not carry the info tone', async () => {
+  const { home } = mount({ treeLength: 0 });
+  home.showLauncher();
+  await tick();
+  await home.launcherBrowseSkills();
+  const launcherError = document.getElementById('launcher-error');
+  assert.equal(launcherError.classList.contains('launcher-error--info'), true);
+
+  home.showLauncherNotice('Could not remove that folder.');
+
+  assert.equal(launcherError.classList.contains('launcher-error--info'), false);
+  assert.equal(launcherError.textContent, 'Could not remove that folder.');
+});
+
+test('launcherBrowseAgentConfig: default agent empty, a later detected agent has content -> navigates there without a flash', async () => {
+  const trees = {
+    claude: { groups: [], agents: [{ key: 'claude', detected: true }, { key: 'codex', detected: true }] },
+    codex: { groups: [{ name: 'Instructions' }] },
+  };
+  const { home, calls } = mount({ treeLength: 0, fetchAgentTreeImpl: async (key) => trees[key] });
+  home.showLauncher();
+  await tick();
+  const sidebar = document.getElementById('sidebar');
+
+  await home.launcherBrowseAgentConfig();
+
+  assert.deepEqual(calls.navigateTo, [{ space: 'agents', agentKey: 'codex' }]);
+  assert.equal(document.getElementById('launcher-error').hidden, true, 'no empty notice once a populated agent is found');
+  assert.equal(sidebar.classList.contains('collapsed'), true, 'no intermediate hide/show while probing');
+});
+
+test('launcherBrowseAgentConfig: every agent empty -> stays in the launcher and shows the info notice', async () => {
+  const trees = {
+    claude: { groups: [], agents: [{ key: 'claude', detected: true }, { key: 'codex', detected: true }] },
+    codex: { groups: [] },
+  };
+  const { home, calls } = mount({ treeLength: 0, fetchAgentTreeImpl: async (key) => trees[key] });
+  home.showLauncher();
+  await tick();
+
+  await home.launcherBrowseAgentConfig();
+
+  assert.deepEqual(calls.navigateTo, []);
+  const launcherError = document.getElementById('launcher-error');
+  assert.equal(launcherError.hidden, false);
+  assert.equal(launcherError.classList.contains('launcher-error--info'), true);
+  assert.equal(launcherError.textContent, 'No agent config found. ShowMD looks for ~/.claude/CLAUDE.md, ~/.claude/rules/ and ~/.codex/AGENTS.md.');
 });
