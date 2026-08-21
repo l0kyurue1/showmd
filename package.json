@@ -1,6 +1,6 @@
 {
   "name": "showmd-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Read and edit markdown in your browser.",
   "license": "MIT",
   "author": "Yu-Ruei Wan",
