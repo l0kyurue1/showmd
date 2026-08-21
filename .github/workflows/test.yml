@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -23,8 +23,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20, 22, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -36,8 +36,8 @@ jobs:
     name: skill eval isolation / no model
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: npm install --global @openai/codex@0.147.0 @anthropic-ai/claude-code@2.1.228
