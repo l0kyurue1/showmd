@@ -25,7 +25,7 @@ const workDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-smok
 const settingsHome = path.join(workDir, 'settings-home');
 mkdirSync(settingsHome, { recursive: true });
 writeFileSync(path.join(settingsHome, 'settings.json'), JSON.stringify({ updateCheck: false }));
-const env = { ...process.env, SHOWMD_HISTORY_HOME: path.join(workDir, 'history'), SHOWMD_SETTINGS_HOME: settingsHome };
+const env = { ...process.env, SHOWMD_HISTORY_HOME: path.join(workDir, 'history'), SHOWMD_SETTINGS_HOME: settingsHome, SHOWMD_APP_DIR: path.join(workDir, 'app-dir') };
 const servedRoot = path.join(workDir, 'docs');
 const outsideDir = path.join(workDir, 'outside');
 mkdirSync(path.join(servedRoot, 'notes'), { recursive: true });

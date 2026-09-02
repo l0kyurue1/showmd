@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -59,6 +59,21 @@ test('installApp: reinstalling replaces the bundle in place', mac, () => {
   const second = installApp({ home, applicationsDir: apps, iconPath: icon, cliPath: '/b/cli.js', version: '2.0.0' });
   assert.equal(second.dest, first.dest);
   assert.equal(existsSync(path.join(second.dest, 'Contents/Resources/stale')), false);
+});
+
+test('installApp: a failed rebuild leaves the previous bundle intact and no temp sibling behind', mac, () => {
+  const home = path.join(workDir, 'home-atomic');
+  const apps = path.join(home, 'Applications');
+  const { dest } = installApp({ home, applicationsDir: apps, iconPath: icon, version: '1.0.0' });
+  const before = readFileSync(path.join(dest, 'Contents/Info.plist'), 'utf8');
+
+  assert.throws(
+    () => installApp({ home, applicationsDir: apps, iconPath: path.join(workDir, 'no-such-icon.icns'), version: '2.0.0' }),
+    /ENOENT/,
+  );
+
+  assert.equal(readFileSync(path.join(dest, 'Contents/Info.plist'), 'utf8'), before);
+  assert.deepEqual(readdirSync(apps), ['ShowMD.app']);
 });
 
 test('launchSh: generated launcher is valid POSIX sh', posix, () => {

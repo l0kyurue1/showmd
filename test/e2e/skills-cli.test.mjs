@@ -71,7 +71,7 @@ test.before(async () => {
   child = spawn(
     'node',
     [path.join(PROJECT, 'bin', 'cli.js'), 'skills', rootA, rootB, '--no-open', '--port', String(PORT)],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome } }
+    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, SHOWMD_SETTINGS_HOME: settingsHome, SHOWMD_APP_DIR: path.join(fakeHome, 'app-dir') } }
   );
   child.stdout.on('data', (d) => (stdout += d.toString()));
   child.stderr.on('data', (d) => (stderr += d.toString()));

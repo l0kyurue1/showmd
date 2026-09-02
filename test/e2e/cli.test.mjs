@@ -13,6 +13,7 @@ const PROJECT = path.resolve(HERE, '..', '..');
 // realpath every temp root: windows hands back 8.3 short names here, and libuv
 // aborts a served process when a watch event's long filename does not match
 const workDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'showmd-cli-')));
+process.env.SHOWMD_APP_DIR = path.join(workDir, 'app-dir');
 const filePath = path.join(workDir, 'file.md');
 writeFileSync(filePath, '# hi\n');
 // isolates the default-port tests below from any settings.json a real user saved

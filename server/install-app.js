@@ -300,52 +300,73 @@ function installApp(opts = {}) {
   // reinstalling rebuilds the bundle from scratch; without this the .md
   // declaration is dropped and Finder silently reverts to the old handler
   const keepMd = declaresMarkdown(dest);
-  fs.rmSync(dest, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const dir = path.dirname(dest);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPrefix = '.ShowMD-tmp-';
+  for (const name of fs.readdirSync(dir)) {
+    if (name.startsWith(tmpPrefix)) fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+  }
+  const tmp = path.join(dir, `${tmpPrefix}${process.pid}-${Math.random().toString(36).slice(2)}.app`);
 
-  const src = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'showmd-app-')), 'ShowMD.applescript');
-  fs.writeFileSync(src, appleScript(node, cli));
   try {
-    proc.capture('osacompile', ['-s', '-o', dest, src], { stdio: 'pipe' });
-  } finally {
-    fs.rmSync(path.dirname(src), { recursive: true, force: true });
+    const src = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'showmd-app-')), 'ShowMD.applescript');
+    fs.writeFileSync(src, appleScript(node, cli));
+    try {
+      proc.capture('osacompile', ['-s', '-o', tmp, src], { stdio: 'pipe' });
+    } finally {
+      fs.rmSync(path.dirname(src), { recursive: true, force: true });
+    }
+
+    const resources = path.join(tmp, 'Contents', 'Resources');
+    // the applet ships an asset catalog whose CFBundleIconName wins over
+    // CFBundleIconFile, which is what leaves the generic AppleScript icon showing
+    fs.rmSync(path.join(resources, 'Assets.car'), { force: true });
+    for (const name of ['showmd.icns', 'droplet.icns']) fs.copyFileSync(icon, path.join(resources, name));
+    fs.copyFileSync(docIcon(opts), path.join(resources, 'showmd-doc.icns'));
+
+    const plist = path.join(tmp, 'Contents', 'Info.plist');
+    const plutil = (...args) => proc.capture('plutil', [...args, plist], { stdio: 'pipe' });
+    try {
+      plutil('-remove', 'CFBundleIconName');
+    } catch {
+      // absent on older osacompile output; nothing to unset
+    }
+    for (const [key, value] of [
+      ['CFBundleName', 'ShowMD'],
+      ['CFBundleDisplayName', 'ShowMD'],
+      ['CFBundleIconFile', 'showmd'],
+      ['CFBundleIdentifier', BUNDLE_ID],
+      ['CFBundleShortVersionString', version],
+      ['CFBundleVersion', version],
+      ['ShowMDCliPath', cli],
+      // These descriptions let macOS prompt instead of returning EPERM silently.
+      ['NSDocumentsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
+      ['NSDesktopFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
+      ['NSDownloadsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
+      ['NSRemovableVolumesUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
+    ]) {
+      plutil('-replace', key, '-string', value);
+    }
+    // osacompile declares every extension; showmd only opens a folder unless the
+    // user has registered it for .md
+    plutil('-replace', 'CFBundleDocumentTypes', '-json',
+      JSON.stringify(keepMd ? [FOLDER_TYPE, MD_TYPE] : [FOLDER_TYPE]));
+    reseal(tmp, opts);
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    throw err;
   }
 
-  const resources = path.join(dest, 'Contents', 'Resources');
-  // the applet ships an asset catalog whose CFBundleIconName wins over
-  // CFBundleIconFile, which is what leaves the generic AppleScript icon showing
-  fs.rmSync(path.join(resources, 'Assets.car'), { force: true });
-  for (const name of ['showmd.icns', 'droplet.icns']) fs.copyFileSync(icon, path.join(resources, name));
-  fs.copyFileSync(docIcon(opts), path.join(resources, 'showmd-doc.icns'));
-
-  const plist = path.join(dest, 'Contents', 'Info.plist');
-  const plutil = (...args) => proc.capture('plutil', [...args, plist], { stdio: 'pipe' });
+  const old = `${tmp}-old`;
+  if (fs.existsSync(dest)) fs.renameSync(dest, old);
   try {
-    plutil('-remove', 'CFBundleIconName');
-  } catch {
-    // absent on older osacompile output; nothing to unset
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (fs.existsSync(old)) fs.renameSync(old, dest);
+    throw err;
   }
-  for (const [key, value] of [
-    ['CFBundleName', 'ShowMD'],
-    ['CFBundleDisplayName', 'ShowMD'],
-    ['CFBundleIconFile', 'showmd'],
-    ['CFBundleIdentifier', BUNDLE_ID],
-    ['CFBundleShortVersionString', version],
-    ['CFBundleVersion', version],
-    ['ShowMDCliPath', cli],
-    // These descriptions let macOS prompt instead of returning EPERM silently.
-    ['NSDocumentsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
-    ['NSDesktopFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
-    ['NSDownloadsFolderUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
-    ['NSRemovableVolumesUsageDescription', 'ShowMD opens markdown files from folders you choose.'],
-  ]) {
-    plutil('-replace', key, '-string', value);
-  }
-  // osacompile declares every extension; showmd only opens a folder unless the
-  // user has registered it for .md
-  plutil('-replace', 'CFBundleDocumentTypes', '-json',
-    JSON.stringify(keepMd ? [FOLDER_TYPE, MD_TYPE] : [FOLDER_TYPE]));
-  reseal(dest, opts);
+  fs.rmSync(old, { recursive: true, force: true });
   if (keepMd) proc.capture(opts.lsregister || LSREGISTER, ['-f', dest], { stdio: 'pipe' });
 
   return { dest, cli, ephemeral: isEphemeral(cli) };
