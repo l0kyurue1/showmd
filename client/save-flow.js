@@ -8,6 +8,7 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
     dirty: false,
     savedContent: '',
     pendingExternal: null,
+    inflight: [],
     attached: true,
 
     setDirty(d) {
@@ -61,7 +62,7 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
     // Reject failed refetches before they can replace saved or staged text.
     decideExternalUpdate({ ok, text, dirty }) {
       if (!ok) return { action: 'error', text: null };
-      if (text === flow.savedContent) return { action: 'ignore', text: null };
+      if (text === flow.savedContent || flow.inflight.includes(text)) return { action: 'ignore', text: null };
       return { action: dirty ? 'stage' : 'adopt', text };
     },
 
@@ -82,8 +83,13 @@ export function createSaveFlow({ put, read, onState, delay = SAVE_DEBOUNCE_MS, t
     },
 
     async write(text) {
-      await put(text);
-      flow.savedContent = text;
+      flow.inflight.push(text);
+      try {
+        await put(text);
+        flow.savedContent = text;
+      } finally {
+        flow.inflight.splice(flow.inflight.indexOf(text), 1);
+      }
     },
 
     // Detached or empty reads cannot save; unchanged buffers skip the request.

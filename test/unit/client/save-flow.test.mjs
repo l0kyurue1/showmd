@@ -172,6 +172,29 @@ test('decideExternalUpdate: text identical to the saved copy is a no-op', () => 
   assert.deepEqual(dirty, { action: 'ignore', text: null });
 });
 
+test('decideExternalUpdate: the watcher echo of an in-flight write is ignored', async () => {
+  let release;
+  const h = harness({ buffer: 'typed', put: () => new Promise((r) => { release = r; }) });
+  h.flow.adopt('old');
+  h.flow.schedule();
+  const flushing = h.flow.flush();
+  const echo = h.flow.decideExternalUpdate({ ok: true, text: 'typed', dirty: true });
+  assert.deepEqual(echo, { action: 'ignore', text: null });
+  const foreign = h.flow.decideExternalUpdate({ ok: true, text: 'someone else', dirty: true });
+  assert.equal(foreign.action, 'stage');
+  release();
+  await flushing;
+  assert.deepEqual(h.flow.inflight, []);
+  assert.equal(h.flow.saved(), 'typed');
+});
+
+test('a failed write drops its in-flight mark', async () => {
+  const h = harness({ buffer: 'typed', put: async () => { throw new Error('boom'); } });
+  await h.flow.flush();
+  assert.deepEqual(h.flow.inflight, []);
+  assert.equal(h.flow.dirty, true);
+});
+
 for (const label of ['404', '500', '403']) {
   test(`decideExternalUpdate: a ${label} response never adopts or stages`, () => {
     const h = harness();

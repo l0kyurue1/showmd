@@ -6,7 +6,7 @@ import { MODE_CYCLE, createViewState, isSettingsOpen, isLauncherOpen, isSourceVi
 import { startMarquee, stopMarquee, reducedMotion } from './marquee.js';
 import { createHistoryView } from './history-view.js';
 import { createDocView } from './doc-view.js';
-import { createSaveFlow } from './save-flow.js';
+import { createSaveFlow, SAVE_DEBOUNCE_MS as INFO_REFRESH_MS } from './save-flow.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
 import { followRestart } from './restart-follow.js';
 import { createHomeView, SKILLS_EMPTY_NOTICE, AGENTS_EMPTY_NOTICE } from './home-view.js';
@@ -218,6 +218,14 @@ function refreshInfo(text) {
   renderAgents();
 }
 
+let infoRefreshTimer = null;
+function scheduleInfoRefresh() {
+  clearTimeout(infoRefreshTimer);
+  infoRefreshTimer = setTimeout(() => {
+    if (!panelClosed()) refreshInfo();
+  }, INFO_REFRESH_MS);
+}
+
 function findSkillForFile(file) {
   return file ? metadataForDocument(state.navigation, file, 'skill') : null;
 }
@@ -343,7 +351,7 @@ async function setMode(mode) {
         if (!editorCreating) {
           editorCreating = ensureEditorModule().then(({ createEditor }) => createEditor(editorHost, {
             doc: currentContent(),
-            onChange: () => save.schedule(),
+            onChange: () => { save.schedule(); scheduleInfoRefresh(); },
             onSave: () => save.flush(),
             onToggleMode: () => setMode(MODE_CYCLE[viewState.view.mode]),
             blocks,
