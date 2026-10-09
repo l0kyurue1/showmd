@@ -743,8 +743,12 @@ async function fetchSettings() {
 
 async function saveSetting(key, value) {
   try {
-    await api.putSettings({ [key]: value });
-  } catch {}
+    const res = await api.putSettings({ [key]: value });
+    if (res && res.ok === false) throw new Error(`settings save failed: ${res.status}`);
+  } catch (err) {
+    console.error('showmd: setting not saved', err);
+    setSaveState('error', 'Setting not saved', `could not save ${key}`);
+  }
 }
 
 const settingsView = createSettingsView({

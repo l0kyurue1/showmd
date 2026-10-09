@@ -1157,3 +1157,17 @@ test('outline jump respects reduced motion', async () => {
   h.click(row);
   assert.deepEqual(behaviors, ['smooth', 'auto']);
 });
+
+test('failed setting save shows on the save chip', async () => {
+  const failures = {
+    'a rejected request': () => { throw new Error('offline'); },
+    'a non-ok response': () => ({ status: 500, body: {} }),
+  };
+  for (const [label, handler] of Object.entries(failures)) {
+    const h = await bootApp({ root: { dir: null, name: null }, systemDark: false });
+    h.fetch.on('PUT', '/api/settings', handler);
+    h.click(h.document.getElementById('theme-btn'));
+    await h.waitFor(() => h.document.getElementById('save-chip-text').textContent === 'Setting not saved');
+    assert.equal(h.document.getElementById('save-chip-dot').className.includes('error'), true, label);
+  }
+});
