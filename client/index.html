@@ -97,10 +97,10 @@
 </div>
 <aside id="panel" class="collapsed">
   <div class="panel-tabs" role="tablist">
-    <button class="panel-tab on" id="tab-info" role="tab" aria-selected="true">Details</button>
-    <button class="panel-tab" id="tab-history" role="tab" aria-selected="false">History</button>
+    <button class="panel-tab on" id="tab-info" role="tab" aria-controls="pane-info" aria-selected="true">Details</button>
+    <button class="panel-tab" id="tab-history" role="tab" aria-controls="pane-history" aria-selected="false">History</button>
   </div>
-  <div id="pane-info">
+  <div id="pane-info" role="tabpanel" aria-labelledby="tab-info">
     <div class="hist-header" id="outline-header">Outline</div>
     <div id="doc-outline"></div>
     <div class="hist-header" id="agents-header" hidden>Skill</div>
@@ -110,7 +110,7 @@
     <div class="hist-header">Stats</div>
     <div id="doc-stats"></div>
   </div>
-  <div id="pane-history" hidden>
+  <div id="pane-history" role="tabpanel" aria-labelledby="tab-history" hidden>
     <div class="hist-header"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3.06 13a9 9 0 1 0 .49 -4.087"/><path d="M3 4.001v5h5"/><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/></svg>History</div>
     <div class="glide-list" id="ver-list"></div>
     <button class="restore" id="restore-btn" disabled>Restore this version</button>

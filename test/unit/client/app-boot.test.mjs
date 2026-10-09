@@ -1110,6 +1110,12 @@ test('panel tabs expose tab semantics', async () => {
   assert.equal(h.document.querySelector('.panel-tabs').getAttribute('role'), 'tablist');
   assert.equal(info.getAttribute('role'), 'tab');
   assert.equal(history.getAttribute('role'), 'tab');
+  for (const [tab, paneId] of [[info, 'pane-info'], [history, 'pane-history']]) {
+    const pane = h.document.getElementById(paneId);
+    assert.equal(pane.getAttribute('role'), 'tabpanel', paneId);
+    assert.equal(pane.getAttribute('aria-labelledby'), tab.id, paneId);
+    assert.equal(tab.getAttribute('aria-controls'), paneId, tab.id);
+  }
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
   h.click(history);
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['false', 'true']);
