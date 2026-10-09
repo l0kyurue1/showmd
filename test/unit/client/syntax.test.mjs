@@ -65,6 +65,17 @@ test('mathSpans returns spans in document order', () => {
   assert.deepEqual(spans.map((s) => s.src), ['a', 'b', 'c']);
 });
 
+test('mathSpans never uses an escaped dollar as a delimiter', () => {
+  assert.deepEqual(mathSpans('costs \\$5 and $x$').map((s) => s.src), ['x']);
+  assert.deepEqual(mathSpans('\\$a\\$ and $x$').map((s) => s.src), ['x']);
+  assert.deepEqual(mathSpans('\\$\\$x\\$\\$'), []);
+});
+
+test('mathSpans keeps an escaped dollar inside a span and honors escaped backslashes', () => {
+  assert.deepEqual(mathSpans('$a \\$ b$').map((s) => s.src), ['a \\$ b']);
+  assert.deepEqual(mathSpans('\\\\$x$').map((s) => s.src), ['x']);
+});
+
 test('markEnd rejects non-marks, empty marks and newlines', () => {
   assert.equal(markEnd('==a==', 0), 3);
   assert.equal(markEnd('xx', 0), -1);

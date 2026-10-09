@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { JSDOM } from 'jsdom';
+import { createPipeline } from '../../../client/pipeline.js';
+
+const markdownit = createRequire(import.meta.url)('markdown-it');
 
 const dom = new JSDOM('<!doctype html><html><body><div id="doc"></div></body></html>');
 global.window = dom.window;
@@ -66,6 +70,13 @@ test('renderDocumentInto replaces inline math and keeps the surrounding text', a
   assert.equal(el.querySelectorAll('.katex').length, 1);
   assert.equal(el.querySelector('.katex').textContent, 'I:a+b');
   assert.equal(el.textContent, 'before I:a+b after');
+});
+
+test('Read Mode keeps an escaped dollar literal and still renders later math', async () => {
+  const html = createPipeline(markdownit).render('costs \\$5 and $x$');
+  const el = await renderMath(html);
+  assert.equal(el.querySelectorAll('.katex').length, 1);
+  assert.equal(el.textContent.trim(), 'costs $5 and I:x');
 });
 
 test('renderDocumentInto renders display math in display mode', async () => {
