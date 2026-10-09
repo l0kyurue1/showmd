@@ -349,3 +349,12 @@ test('commit preserves location.search: a ?scope= query survives an overlay togg
   viewState.dispatch({ type: 'settings-close' });
   assert.equal(location.search, '?scope=docs', 'closing the overlay must not drop the query');
 });
+
+test('mode buttons expose the active mode via aria-pressed', () => {
+  const { viewState, sourceBtn, editBtn, readBtn } = mountViewState();
+  const pressed = () => [sourceBtn, editBtn, readBtn].map((b) => b.getAttribute('aria-pressed'));
+  viewState.dispatch({ type: 'mode', mode: 'edit' });
+  assert.deepEqual(pressed(), ['false', 'true', 'false']);
+  viewState.dispatch({ type: 'mode', mode: 'source' });
+  assert.deepEqual(pressed(), ['true', 'false', 'false']);
+});
