@@ -1102,3 +1102,17 @@ test('back and forward expose aria-disabled', async () => {
   assert.equal(back.getAttribute('aria-disabled'), 'true');
   assert.equal(fwd.hasAttribute('aria-disabled'), false);
 });
+
+test('panel tabs expose tab semantics', async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  const info = h.document.getElementById('tab-info');
+  const history = h.document.getElementById('tab-history');
+  assert.equal(h.document.querySelector('.panel-tabs').getAttribute('role'), 'tablist');
+  assert.equal(info.getAttribute('role'), 'tab');
+  assert.equal(history.getAttribute('role'), 'tab');
+  assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
+  h.click(history);
+  assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['false', 'true']);
+  h.click(info);
+  assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
+});
