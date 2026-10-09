@@ -1069,3 +1069,12 @@ test("Back at the start of the tab's stack does not call history.back", async ()
   h.click(h.document.getElementById('back-btn'));
   assert.equal(calls, 0);
 });
+
+test('save chip is a polite live region', async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  const chip = h.document.getElementById('save-chip');
+  assert.equal(chip.getAttribute('role'), 'status');
+  assert.equal(chip.getAttribute('aria-live'), 'polite');
+  assert.equal(chip.contains(h.document.getElementById('save-chip-tip')), false);
+  assert.equal(chip.contains(h.document.getElementById('save-chip-text')), true);
+});
