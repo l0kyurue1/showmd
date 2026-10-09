@@ -1172,6 +1172,28 @@ test('failed setting save shows on the save chip', async () => {
   }
 });
 
+test('save chip is busy while saving and does not rewrite an unchanged state', async () => {
+  const h = await bootApp({ root: { dir: null, name: null }, systemDark: false });
+  const chip = h.document.getElementById('save-chip');
+  const text = h.document.getElementById('save-chip-text');
+  h.EventSource.instances[0].emit({ event: 'server-restarting', port: 1 });
+  assert.equal(text.textContent, 'Restarting…');
+  assert.equal(chip.getAttribute('aria-busy'), 'true');
+
+  h.fetch.on('PUT', '/api/settings', () => ({ status: 500, body: {} }));
+  h.click(h.document.getElementById('theme-btn'));
+  await h.waitFor(() => text.textContent === 'Setting not saved');
+  assert.equal(chip.hasAttribute('aria-busy'), false);
+
+  const records = [];
+  const observer = new h.window.MutationObserver((batch) => records.push(...batch));
+  observer.observe(chip, { childList: true, characterData: true, subtree: true, attributes: true });
+  h.click(h.document.getElementById('theme-btn'));
+  await h.waitFor(() => h.fetch.calls.filter((c) => c.method === 'PUT' && c.pathname === '/api/settings').length >= 2);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(records.length + observer.takeRecords().length, 0);
+});
+
 test('popstate failure is reported and does not wedge navigation', async () => {
   const h = await bootApp({
     route: { space: 'root', rootKey: KEY, documentPath: 'a.md' },
