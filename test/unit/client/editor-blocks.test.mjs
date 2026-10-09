@@ -250,3 +250,32 @@ test('blockGaps applies the margin contract across edge combinations and blank-l
     assert.deepEqual(collectGaps(gapStateFor(doc))[decorationKind], expected, name);
   }
 });
+
+test('hard-wrapped list item lines share the content column', async () => {
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
+  const doc = [
+    '1. first line of the item',
+    '   wrapped continuation',
+    'lazy continuation',
+    '- [ ] task item',
+    '  task continuation',
+    '',
+    'tail',
+  ].join('\n');
+  const editor = createEditor(host, { doc, onChange() {}, onSave() {}, onToggleMode() {}, blocks: {} });
+  try {
+    editor.setEdit(true);
+    editor.jumpToLine(7);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const lines = [...host.querySelectorAll('.cm-line')];
+    const hung = lines.slice(0, 5).map((el) => el.style.paddingLeft !== '' && el.style.textIndent !== '');
+    assert.deepEqual(hung, [true, true, true, true, true]);
+    assert.equal(lines[1].textContent, 'wrapped continuation');
+    assert.equal(lines[2].textContent, 'lazy continuation');
+    assert.equal(lines[4].textContent, 'task continuation');
+    assert.equal(lines[6].style.paddingLeft, '');
+  } finally {
+    editor.destroy();
+  }
+});

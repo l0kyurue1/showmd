@@ -351,10 +351,21 @@ function buildEditDecos(view) {
             // same geometry as read mode's ::marker inside `ul { padding-left }`
             const hang = isTask ? 'var(--task-hang)' : 'var(--list-indent)';
             const pad = `calc(var(--list-indent) * ${depth - 1} + ${hang})`;
-            decos.push(Decoration.line({
+            const hangLine = Decoration.line({
               attributes: { style: `padding-left:${pad};text-indent:calc(-1 * ${hang})` },
-            }).range(line.from));
+            });
+            decos.push(hangLine.range(line.from));
             hide(line.from, node.from);
+            // a task item's text parses as Task, not Paragraph
+            for (let c = node.node.parent && node.node.parent.firstChild; c; c = c.nextSibling) {
+              if (c.name !== 'Paragraph' && c.name !== 'Task') continue;
+              for (let n = doc.lineAt(c.from).number; n <= doc.lineAt(c.to).number; n++) {
+                const l = doc.line(n);
+                if (l.from === line.from) continue;
+                decos.push(hangLine.range(l.from));
+                hide(l.from, l.from + spaceAfter(l.from));
+              }
+            }
             if (onActiveLine(node.from, node.to)) break;
             if (isTask) { hide(node.from, node.to + spaceAfter(node.to)); break; }
             const mark = doc.sliceString(node.from, node.to);
