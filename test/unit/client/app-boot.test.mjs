@@ -1140,3 +1140,20 @@ test('icon buttons have clean labels and keyshortcuts', async () => {
     }
   }
 });
+
+test('outline jump respects reduced motion', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# One\n\n## Two\n' },
+    route: { space: 'root', rootKey: TEST_ROOT_KEY, documentPath: 'a.md' },
+  });
+  await h.waitFor(() => h.document.querySelector('#doc-outline .outline-row'));
+  const behaviors = [];
+  h.window.Element.prototype.scrollIntoView = function (opts) { behaviors.push(opts.behavior); };
+  const row = h.document.querySelectorAll('#doc-outline .outline-row')[1];
+  h.click(row);
+  h.matchMedia('(prefers-reduced-motion: reduce)').matches = true;
+  h.click(row);
+  assert.deepEqual(behaviors, ['smooth', 'auto']);
+});

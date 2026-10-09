@@ -115,24 +115,33 @@ export function createFakeEventSource() {
   return FakeEventSource;
 }
 
+// One list per query for the whole process: client modules that cache a
+// MediaQueryList (marquee.js) keep the first boot's object across boots.
+const sharedMediaLists = new Map();
+
 function createFakeMatchMedia() {
-  const lists = new Map();
+  for (const list of sharedMediaLists.values()) {
+    list.matches = false;
+    list._listeners.clear();
+  }
   function matchMedia(query) {
-    if (!lists.has(query)) {
+    if (!sharedMediaLists.has(query)) {
       const listeners = new Set();
-      lists.set(query, {
+      const list = {
         media: query,
         matches: false,
+        _listeners: listeners,
         addEventListener: (_type, fn) => listeners.add(fn),
         removeEventListener: (_type, fn) => listeners.delete(fn),
         addListener: (fn) => listeners.add(fn),
         removeListener: (fn) => listeners.delete(fn),
-        _fire() { for (const fn of listeners) fn({ matches: lists.get(query).matches }); },
-      });
+        _fire() { for (const fn of listeners) fn({ matches: list.matches }); },
+      };
+      sharedMediaLists.set(query, list);
     }
-    return lists.get(query);
+    return sharedMediaLists.get(query);
   }
-  matchMedia.lists = lists;
+  matchMedia.lists = sharedMediaLists;
   return matchMedia;
 }
 
