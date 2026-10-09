@@ -1,22 +1,37 @@
 // no vendor globals, so both Block Renderer adapters and the markdown-it
 // pipeline read the same rules.
 
+// a `$` after an odd run of backslashes is escaped; after an even run it is a delimiter
+function escapedAt(text, i) {
+  let n = 0;
+  while (i - n > 0 && text.charCodeAt(i - n - 1) === 0x5C) n++;
+  return n % 2 === 1;
+}
+
 export function mathSpans(text) {
   const out = [];
   if (!text.includes('$')) return out;
   const covered = [];
   let m;
 
-  const block = /\$\$([^$]+?)\$\$/g;
+  const block = /\$\$((?:\\[\s\S]|[^$\\])+?)\$\$/g;
   while ((m = block.exec(text))) {
+    if (escapedAt(text, m.index)) {
+      block.lastIndex = m.index + 1;
+      continue;
+    }
     const to = m.index + m[0].length;
     covered.push([m.index, to]);
     out.push({ from: m.index, to, src: m[1].trim(), display: true });
   }
 
-  const inline = /\$([^\s$][^$\n]*?)\$/g;
+  const inline = /\$((?:\\[^\n]|[^\s$\\])(?:\\[^\n]|[^$\\\n])*?)\$/g;
   while ((m = inline.exec(text))) {
     const from = m.index;
+    if (escapedAt(text, from)) {
+      inline.lastIndex = from + 1;
+      continue;
+    }
     const to = from + m[0].length;
     if (covered.some(([a, b]) => from < b && to > a)) continue;
     // `$3.50 and $4` is currency, not math: a trailing space before the closing

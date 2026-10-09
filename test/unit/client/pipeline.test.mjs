@@ -275,6 +275,12 @@ test('empty paragraphs: spacers leave data-line of real blocks unchanged', () =>
   assert.equal((html.match(/data-line/g) || []).length, 3);
 });
 
+test('render: an escaped dollar in a callout title stays in the title', () => {
+  const html = pipeline().render('> [!tip] Costs \\$5\n> body');
+  assert.match(html, /class="callout-name">Costs \$5</);
+  assert.match(html, /<p>body<\/p>/);
+});
+
 test('render: math source survives markdown escapes and emphasis', () => {
   const p = pipeline();
   assert.equal(p.render('$a \\, b$'), '<p data-line="0">$a \\, b$</p>\n');

@@ -123,7 +123,10 @@ export function createPipeline(markdownit) {
       if (!inline || inline.type !== 'inline') continue;
       const first = inline.children[0];
       if (!first || first.type !== 'text') continue;
-      const match = /^\[!([a-zA-Z][\w-]*)\]([ \t]*)(.*)$/.exec(first.content);
+      let run = 0;
+      while (run < inline.children.length && ['text', 'escaped_dollar'].includes(inline.children[run].type)) run++;
+      const lead = inline.children.slice(0, run).map((c) => c.content).join('');
+      const match = /^\[!([a-zA-Z][\w-]*)\]([ \t]*)(.*)$/.exec(lead);
       if (!match) continue;
 
       let depth = 0, closeIdx = -1;
@@ -142,8 +145,8 @@ export function createPipeline(markdownit) {
       tokens[i].attrJoin('class', 'callout callout-' + (known ? type : 'note'));
       tokens[closeIdx].tag = 'div';
 
-      if (inline.children[1] && inline.children[1].type === 'softbreak') inline.children.splice(0, 2);
-      else inline.children.splice(0, 1);
+      if (inline.children[run] && inline.children[run].type === 'softbreak') inline.children.splice(0, run + 1);
+      else inline.children.splice(0, run);
       if (inline.children.length === 0) tokens.splice(i + 1, 3);
 
       const titleToken = new state.Token('html_block', '', 0);
@@ -170,7 +173,13 @@ export function createPipeline(markdownit) {
 
   let mathCache = { src: null, spans: [] };
   md.inline.ruler.before('escape', 'math_source', (state, silent) => {
-    if (state.src.charCodeAt(state.pos) !== 0x24) return false;
+    const code = state.src.charCodeAt(state.pos);
+    if (code === 0x5C && state.src.charCodeAt(state.pos + 1) === 0x24) {
+      if (!silent) state.push('escaped_dollar', '', 0).content = '$';
+      state.pos += 2;
+      return true;
+    }
+    if (code !== 0x24) return false;
     if (mathCache.src !== state.src) mathCache = { src: state.src, spans: mathSpans(state.src) };
     const span = mathCache.spans.find((s) => s.from === state.pos);
     if (!span) return false;
@@ -178,6 +187,8 @@ export function createPipeline(markdownit) {
     state.pos = span.to;
     return true;
   });
+
+  md.renderer.rules.escaped_dollar = () => '<span>$</span>';
 
   md.inline.ruler.push('wikilink', (state, silent) => {
     const src = state.src;
