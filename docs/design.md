@@ -14,9 +14,8 @@ House rules, not universal ones. A PR that breaks one should say why.
 - **Focus is borrowed, not taken.** Clicking a control shouldn't move the caret; menus give focus back; a re-render shouldn't drop the focused node. One `:focus-visible` ring, copied onto everything.
 - **Emphasis is rationed.** Default hover is a flat tint. Scale transforms are for primary buttons only. Tooltips wait for hover intent.
 
-Known gaps, so nobody copies the wrong pattern: there is no `prefers-reduced-motion`
-handling in CSS, border radii and chrome font sizes are untokenized literals, and
-shortcut hints are hover-only.
+Known gaps, so nobody copies the wrong pattern: border radii and chrome font sizes
+are untokenized literals.
 
 ## The Variable Contract
 
