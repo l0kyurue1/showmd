@@ -684,3 +684,36 @@ test('amend window: a net-zero change on the root commit starts a new commit', {
   const entries = await timeline(root, 'solo.md');
   assert.equal(entries.length, 2);
 });
+
+async function withFreshHistoryHome(fn, extraEnv = {}) {
+  const home = mkdtempSync(path.join(tmpdir(), 'showmd-history-home-'));
+  const saved = { home: process.env.SHOWMD_HISTORY_HOME };
+  for (const key of Object.keys(extraEnv)) saved[key] = process.env[key];
+  process.env.SHOWMD_HISTORY_HOME = path.join(home, 'history');
+  Object.assign(process.env, extraEnv);
+  try {
+    return await fn(createHistory());
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      const name = key === 'home' ? 'SHOWMD_HISTORY_HOME' : key;
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('amend window: a root-commit amend works in a SHA-256 history store', { skip: !git && 'git unavailable' }, async () => {
+  await withFreshHistoryHome(async (history) => {
+    const root = realGitTmp('showmd-history-sha256-');
+    const file = path.join(root, 'doc.md');
+    writeFileSync(file, '# v1\n');
+    await history.record(root, 'doc.md', 'user');
+    writeFileSync(file, '# v2\n');
+    await assert.doesNotReject(history.record(root, 'doc.md', 'user'));
+    const entries = await history.timeline(root, 'doc.md');
+    assert.equal(entries.length, 1);
+    assert.equal(await history.contentAt(root, 'doc.md', entries[0].rev), '# v2\n');
+    rmSync(root, { recursive: true, force: true });
+  }, { GIT_DEFAULT_HASH: 'sha256' });
+});
