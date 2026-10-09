@@ -642,3 +642,45 @@ test('prune on a root with no shared repo yet is a harmless no-op', { skip: !git
   assert.equal(returned, dir);
   assert.ok(!existsSync(dir));
 });
+
+test('amend window: a net-zero change starts a new commit instead of an empty amend', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-netzero-');
+  const file = path.join(root, 'doc.md');
+  writeFileSync(file, '# v1\n');
+  await record(root, 'doc.md', 'user');
+  writeFileSync(file, '# v2\n');
+  await record(root, 'doc.md', 'external');
+  writeFileSync(file, '# v1\n');
+  await assert.doesNotReject(record(root, 'doc.md', 'external'));
+
+  const entries = await timeline(root, 'doc.md');
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0].source, 'external');
+  const gitDir = historyDirFor(root);
+  assert.equal(execFileSync('git', ['--git-dir', gitDir, 'diff', '--cached', '--name-only'], { encoding: 'utf8' }), '');
+});
+
+test('a file created and deleted within the amend window stays recoverable', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-createdelete-');
+  const file = path.join(root, 'gone.md');
+  writeFileSync(file, '# created\n');
+  await record(root, 'gone.md', 'user');
+  rmSync(file);
+  await record(root, 'gone.md', 'user');
+
+  const entries = await timeline(root, 'gone.md');
+  assert.equal(entries.length, 2);
+  assert.equal(await contentAt(root, 'gone.md', entries[1].rev), '# created\n');
+});
+
+test('amend window: a net-zero change on the root commit starts a new commit', { skip: !git && 'git unavailable' }, async () => {
+  const root = realGitTmp('showmd-history-rootzero-');
+  const file = path.join(root, 'solo.md');
+  writeFileSync(file, '# only\n');
+  await record(root, 'solo.md', 'user');
+  rmSync(file);
+  await assert.doesNotReject(record(root, 'solo.md', 'user'));
+
+  const entries = await timeline(root, 'solo.md');
+  assert.equal(entries.length, 2);
+});
