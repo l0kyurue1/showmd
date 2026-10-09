@@ -135,11 +135,11 @@ function setSaveState(kind, text, title) {
   const dotClass = 'chip-dot ' + kind;
   const tip = title || '';
   if (saveChipDot.className === dotClass && saveChipText.textContent === text && saveChipTip.textContent === tip) return;
+  if (kind === 'saving') saveChip.setAttribute('aria-busy', 'true');
+  else saveChip.removeAttribute('aria-busy');
   saveChipDot.className = dotClass;
   saveChipText.textContent = text;
   saveChipTip.textContent = tip;
-  if (kind === 'saving') saveChip.setAttribute('aria-busy', 'true');
-  else saveChip.removeAttribute('aria-busy');
 }
 
 const save = createSaveFlow({

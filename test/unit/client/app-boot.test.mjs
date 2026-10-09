@@ -1134,6 +1134,8 @@ test('panel tabs expose tab semantics', async () => {
   const h = await bootApp({ root: { dir: null, name: null } });
   const info = h.document.getElementById('tab-info');
   const history = h.document.getElementById('tab-history');
+  const paneInfo = h.document.getElementById('pane-info');
+  const paneHistory = h.document.getElementById('pane-history');
   assert.equal(h.document.querySelector('.panel-tabs').getAttribute('role'), 'tablist');
   assert.equal(info.getAttribute('role'), 'tab');
   assert.equal(history.getAttribute('role'), 'tab');
@@ -1146,8 +1148,10 @@ test('panel tabs expose tab semantics', async () => {
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
   h.click(history);
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['false', 'true']);
+  assert.deepEqual([paneInfo, paneHistory].map((p) => p.hidden), [true, false]);
   h.click(info);
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
+  assert.deepEqual([paneInfo, paneHistory].map((p) => p.hidden), [false, true]);
 });
 
 test('icon buttons have clean labels and keyshortcuts, except the mode buttons', async () => {
@@ -1228,6 +1232,13 @@ test('save chip is busy while saving and does not rewrite an unchanged state', a
   await h.waitFor(() => h.fetch.calls.filter((c) => c.method === 'PUT' && c.pathname === '/api/settings').length >= 2);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(records.length + observer.takeRecords().length, 0);
+
+  h.EventSource.instances[0].emit({ event: 'server-restarting', port: 1 });
+  const ordered = [...records, ...observer.takeRecords()];
+  const busyAt = ordered.findIndex((r) => r.type === 'attributes' && r.attributeName === 'aria-busy');
+  const textAt = ordered.findIndex((r) => r.type !== 'attributes');
+  assert.ok(busyAt >= 0 && textAt >= 0);
+  assert.ok(busyAt < textAt, 'aria-busy is set before the text changes');
 });
 
 test('popstate failure is reported and does not wedge navigation', async () => {
