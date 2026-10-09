@@ -12,6 +12,7 @@ const RAW_COLOR_EXCEPTIONS = new Map([
 ]);
 
 const failures = [];
+const motionFailures = [];
 
 function blankRoot(content) {
   return content.replace(/^:root\s*\{[\s\S]*?\n\}/m, (block) => block.replace(/[^\n]/g, ' '));
@@ -97,13 +98,17 @@ const appCss = readFileSync(path.join(ROOT, 'client/app.css'), 'utf8');
 const reducedMotionRule = appCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\*,\s*\*::before,\s*\*::after\s*\{([^}]*)\}/);
 for (const prop of ['transition-duration', 'transition-delay', 'animation-duration', 'scroll-behavior']) {
   if (!reducedMotionRule || !new RegExp(`(^|[\\s;])${prop}\\s*:`).test(reducedMotionRule[1])) {
-    failures.push(`client/app.css: the global reduced-motion block (*, *::before, *::after) does not set ${prop}`);
+    motionFailures.push(`client/app.css: the global reduced-motion block (*, *::before, *::after) does not set ${prop}`);
   }
 }
 
 if (failures.length) {
   console.error('css-guard: the variable contract is not the only source of these values:');
   for (const f of failures) console.error('  ' + f);
-  process.exit(1);
 }
+if (motionFailures.length) {
+  console.error('css-guard: reduced-motion handling is missing or incomplete:');
+  for (const f of motionFailures) console.error('  ' + f);
+}
+if (failures.length || motionFailures.length) process.exit(1);
 console.log(`css-guard: ok — no raw color literals outside :root, ${SHARED_GEOMETRY.length} shared geometry tokens read by both modes, light-dark() contract enforced on all non-invariant color tokens`);
