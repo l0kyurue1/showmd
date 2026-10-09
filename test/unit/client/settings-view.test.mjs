@@ -447,7 +447,7 @@ test('renderCta puts a markup-bearing version in as text, not as HTML', () => {
   assert.match(ui.cta.querySelector('.update-cta-title').textContent, /<img src=x onerror=alert\(1\)>/);
 });
 
-test('Settings offers Update without dismissal; a failed automatic update offers Try again and the fixed fallback', async () => {
+test('Settings offers Update without dismissal; a failed automatic update offers Try again and the fixed fallback', { timeout: 5000 }, async () => {
   const ui = mount({
     settingsOpen: true,
     updateStates: [{ state: 'failure', manualCommand: 'npm i -g showmd-cli@latest' }],
@@ -462,7 +462,11 @@ test('Settings offers Update without dismissal; a failed automatic update offers
 
   ui.cta.querySelector('.update-cta-btn').click();
   assert.equal(ui.cta.querySelector('.update-cta-title').textContent, 'Updating…');
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await new Promise((resolve) => {
+    const done = () => ui.cta.querySelector('.update-cta-btn')?.textContent === 'Try again' && resolve();
+    new window.MutationObserver(done).observe(ui.cta, { childList: true, subtree: true });
+    done();
+  });
   assert.deepEqual(ui.calls.update, ['boot-token']);
   assert.equal(ui.cta.querySelector('.update-cta-btn').textContent, 'Try again');
   assert.equal(ui.cta.querySelector('code').textContent, 'npm i -g showmd-cli@latest');
