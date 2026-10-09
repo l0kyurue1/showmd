@@ -383,6 +383,7 @@ export function createHomeView({
     if (!isLauncherOpen(viewState.view)) {
       launcherSidebarWasCollapsed = sidebar.classList.contains('collapsed');
       sidebar.classList.add('collapsed');
+      sidebar.inert = true;
       launcherPanelWasOpen = getPanelOpen();
       setPanel(false);
       headerEl.hidden = true;
@@ -400,6 +401,7 @@ export function createHomeView({
     headerEl.hidden = false;
     appLogo.hidden = false;
     sidebar.classList.toggle('collapsed', launcherSidebarWasCollapsed);
+    sidebar.inert = launcherSidebarWasCollapsed;
     setPanel(launcherPanelWasOpen);
   }
 
