@@ -723,3 +723,15 @@ test('amend window: a root-commit amend works in a SHA-256 history store', { ski
     rmSync(root, { recursive: true, force: true });
   }, { GIT_DEFAULT_HASH: 'sha256' });
 });
+
+test('a file deleted before its first history commit is skipped', { skip: !git && 'git unavailable' }, async () => {
+  await withFreshHistoryHome(async (history) => {
+    const root = realGitTmp('showmd-history-nevertracked-');
+    const file = path.join(root, 'ghost.md');
+    writeFileSync(file, '# ghost\n');
+    rmSync(file);
+    await assert.doesNotReject(history.record(root, 'ghost.md', 'user'));
+    assert.deepEqual(await history.timeline(root, 'ghost.md'), []);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

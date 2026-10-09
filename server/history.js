@@ -411,13 +411,18 @@ function createHistory(gitExec = realGitExec, options = {}) {
     const storeRelPath = relKeyFor(driveRoot, absPath);
     return withCrossProcessLock(gitDir, () => withGitLock(gitDir, async () => {
       // Seed a baseline so the first save diffs against repository content.
-      if (!(await getLastCommit(gitDir, driveRoot, storeRelPath))) {
+      const hadHistory = !!(await getLastCommit(gitDir, driveRoot, storeRelPath));
+      if (!hadHistory) {
         const base = await repoReadAt(root, relPath, 'HEAD');
         if (base != null) {
           await writeBlobInto(gitDir, driveRoot, storeRelPath, base);
           const seeded = await run(gitDir, driveRoot, ['diff', '--cached', '--quiet', '--', storeRelPath], [1]);
           if (seeded.code !== 0) await run(gitDir, driveRoot, ['commit', '-m', `${SOURCES.baseline}: ${storeRelPath}`]);
         }
+      }
+      if (!hadHistory && !(await fsp.access(absPath).then(() => true, () => false))) {
+        const tracked = await run(gitDir, driveRoot, ['ls-files', '--cached', '-z', '--', storeRelPath]);
+        if (!tracked.stdout) return;
       }
       await run(gitDir, driveRoot, ['add', '-f', '--', storeRelPath]);
       const staged = await run(gitDir, driveRoot, ['diff', '--cached', '--quiet', '--', storeRelPath], [1]);
