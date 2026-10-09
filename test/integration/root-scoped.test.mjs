@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import '../helpers/isolate-state.mjs';
+import { awaitWatcherLive, openSSE } from '../helpers/sse-client.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,35 +35,15 @@ async function postRoot(base, dir) {
   return { status: res.status, body: await res.json() };
 }
 
-async function collectSSEUntil(url, wantPaths, ms = 8000) {
+function collectSSEUntil(url, wantPaths, ms = 8000) {
   const remaining = new Set(wantPaths);
-  const controller = new AbortController();
-  const events = [];
-  const res = await fetch(url, { signal: controller.signal });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-        if (!line) continue;
-        const event = JSON.parse(line.slice('data: '.length));
-        events.push(event);
-        remaining.delete(event.path);
-        if (remaining.size === 0) controller.abort();
-      }
-    }
-  } catch { /* aborted */ }
-  clearTimeout(timer);
-  return events;
+  return openSSE(url, {
+    until: (event) => {
+      remaining.delete(event.path);
+      return remaining.size === 0;
+    },
+    timeoutMs: ms,
+  });
 }
 
 test('root-scoped: two roots served simultaneously, tree and raw per key', async () => {
@@ -193,11 +174,12 @@ test('root-scoped: SSE document-changed events for two roots each carry their ow
       const keyA = (await (await fetch(`${base}/api/roots`)).json()).roots.find((r) => r.dir === rootA).key;
       const keyB = added.root.key;
 
-      const eventsPromise = collectSSEUntil(`${base}/api/events`, ['sa.md', 'sb.md']);
-      await new Promise((r) => setTimeout(r, 200));
+      await awaitWatcherLive(base, [rootA, rootB]);
+      const sse = collectSSEUntil(`${base}/api/events`, ['sa.md', 'sb.md']);
+      await sse.ready;
       writeFileSync(path.join(rootA, 'sa.md'), '# sa\n');
       writeFileSync(path.join(rootB, 'sb.md'), '# sb\n');
-      const events = await eventsPromise;
+      const events = await sse.events;
 
       const evA = events.find((e) => e.path === 'sa.md');
       const evB = events.find((e) => e.path === 'sb.md');

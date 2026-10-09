@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import '../helpers/isolate-state.mjs';
+import { awaitWatcherLive, openSSE } from '../helpers/sse-client.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -191,33 +192,8 @@ test('POST /api/roots: a file nested under an existing root scopes to its parent
   }
 });
 
-async function collectSSEUntil(url, matcher, ms = 8000) {
-  const controller = new AbortController();
-  const events = [];
-  const res = await fetch(url, { signal: controller.signal });
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-        if (!line) continue;
-        const event = JSON.parse(line.slice('data: '.length));
-        events.push(event);
-        if (matcher(event, events)) controller.abort();
-      }
-    }
-  } catch { /* aborted */ }
-  clearTimeout(timer);
-  return events;
+function collectSSEUntil(url, matcher, ms = 8000) {
+  return openSSE(url, { until: matcher, timeoutMs: ms });
 }
 
 test('POST /api/roots: a parent opened over a narrower root promotes it, with a root-promoted SSE event', async () => {
@@ -229,14 +205,14 @@ test('POST /api/roots: a parent opened over a narrower root promotes it, with a 
     const before = await (await fetch(`${base}/api/roots`)).json();
     const innerKey = before.roots[0].key;
 
-    const eventsPromise = collectSSEUntil(`${base}/api/events`, (e) => e.event === 'root-promoted');
-    await new Promise((r) => setTimeout(r, 200));
+    const sse = collectSSEUntil(`${base}/api/events`, (e) => e.event === 'root-promoted');
+    await sse.ready;
     const { status, body } = await postRoot(base, outer);
     assert.equal(status, 200);
     assert.equal(body.root.dir, outer);
     const outerKey = body.root.key;
 
-    const events = await eventsPromise;
+    const events = await sse.events;
     const promoted = events.find((e) => e.event === 'root-promoted');
     assert.ok(promoted, 'root-promoted event arrived');
     assert.equal(promoted.rootKey, innerKey);
@@ -259,14 +235,14 @@ test('POST /api/roots: a parent opened over two narrower roots promotes both in 
     const { body: docsAdded } = await postRoot(base, docsDir);
     const { body: srcAdded } = await postRoot(base, srcDir);
 
-    const eventsPromise = collectSSEUntil(`${base}/api/events`, (e, all) =>
+    const sse = collectSSEUntil(`${base}/api/events`, (e, all) =>
       all.filter((ev) => ev.event === 'root-promoted').length >= 2);
-    await new Promise((r) => setTimeout(r, 200));
+    await sse.ready;
     const { status, body } = await postRoot(base, outer);
     assert.equal(status, 200);
     const outerKey = body.root.key;
 
-    const events = await eventsPromise;
+    const events = await sse.events;
     const promotedKeys = events.filter((e) => e.event === 'root-promoted').map((e) => e.rootKey).sort();
     assert.deepEqual(promotedKeys, [docsAdded.root.key, srcAdded.root.key].sort());
 
@@ -339,11 +315,12 @@ test('deleting a live root directory closes the root and drops its recents entry
       const before = await (await fetch(`${base}/api/roots`)).json();
       const key = before.roots[0].key;
 
-      const eventsPromise = collectSSEUntil(`${base}/api/events`, (e) => e.event === 'root-removed');
-      await new Promise((r) => setTimeout(r, 300));
+      await awaitWatcherLive(base, [root]);
+      const sse = collectSSEUntil(`${base}/api/events`, (e) => e.event === 'root-removed');
+      await sse.ready;
       rmSync(root, { recursive: true, force: true });
 
-      const events = await eventsPromise;
+      const events = await sse.events;
       const removed = events.find((e) => e.event === 'root-removed');
       assert.ok(removed, 'root-removed event arrived');
       assert.equal(removed.rootKey, key);
@@ -371,10 +348,11 @@ test('deleting a file inside a live root does not close the root', async () => {
       const before = await (await fetch(`${base}/api/roots`)).json();
       const key = before.roots[0].key;
 
-      const eventsPromise = collectSSEUntil(`${base}/api/events`, (e) => e.event === 'change' || e.event === 'unlink', 2000);
-      await new Promise((r) => setTimeout(r, 300));
+      await awaitWatcherLive(base, [root]);
+      const sse = collectSSEUntil(`${base}/api/events`, (e) => e.path === 'a.md' && (e.event === 'change' || e.event === 'unlink'), 2000);
+      await sse.ready;
       rmSync(filePath, { force: true });
-      await eventsPromise;
+      await sse.events;
 
       const after = await (await fetch(`${base}/api/roots`)).json();
       assert.deepEqual(after.roots.map((r) => r.key), [key]);

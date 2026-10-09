@@ -1,3 +1,6 @@
+import { rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
 export function openSSE(url, { until = () => false, timeoutMs = 8000, graceMs = 0 } = {}) {
   const controller = new AbortController();
   const collected = [];
@@ -59,4 +62,25 @@ export function openSSE(url, { until = () => false, timeoutMs = 8000, graceMs = 
     events,
     close: () => controller.abort(),
   };
+}
+
+export async function awaitWatcherLive(base, dirs, timeoutMs = 8000) {
+  const files = dirs.map((dir, i) => path.join(dir, `watch-probe-${i}.md`));
+  const remaining = new Set(files.map((file) => path.basename(file)));
+  const probe = openSSE(`${base}/api/events`, {
+    until: (event) => {
+      remaining.delete(event.path);
+      return remaining.size === 0;
+    },
+    timeoutMs,
+  });
+  await probe.ready;
+  const timer = setInterval(() => files.forEach((file) => writeFileSync(file, String(Date.now()))), 50);
+  try {
+    await probe.events;
+  } finally {
+    clearInterval(timer);
+    files.forEach((file) => rmSync(file, { force: true }));
+  }
+  if (remaining.size) throw new Error('file watcher never reported the probe write');
 }
