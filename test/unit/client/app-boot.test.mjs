@@ -145,6 +145,33 @@ test('off a Mac user agent, kbd hints spell out the modifiers, Ctrl first', asyn
   assert.equal(kbdText(h.document, '#launcher-open-folder'), 'Ctrl+Shift+O');
 });
 
+test('off a Mac user agent, shortcut attributes use Control, not Meta', async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  const shortcuts = [...h.document.querySelectorAll('[aria-keyshortcuts]')].map((el) => el.getAttribute('aria-keyshortcuts'));
+  assert.ok(shortcuts.length > 0);
+  assert.equal(shortcuts.some((v) => v.includes('Meta')), false);
+  assert.equal(h.document.getElementById('sidebar-btn').getAttribute('aria-keyshortcuts'), 'Control+\\');
+});
+
+test('toggling the sidebar keeps the button label in sync with its tooltip', async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  const btn = h.document.getElementById('sidebar-btn');
+  const tipLabel = () => {
+    const clone = btn.querySelector('.tip').cloneNode(true);
+    clone.querySelector('kbd').remove();
+    return clone.textContent.trim();
+  };
+  const labels = [btn.getAttribute('aria-label')];
+  assert.equal(labels[0], tipLabel());
+  h.click(btn);
+  labels.push(btn.getAttribute('aria-label'));
+  assert.equal(labels[1], tipLabel());
+  h.click(btn);
+  labels.push(btn.getAttribute('aria-label'));
+  assert.equal(labels[2], tipLabel());
+  assert.equal(new Set(labels).size, 2);
+});
+
 test('revealLabel: the reveal tooltip is picked from the boot settings platform', async () => {
   const darwin = await bootApp({ root: { dir: null, name: null }, settings: { platform: 'darwin' } });
   assert.equal(darwin.document.getElementById('reveal-btn').querySelector('.tip').textContent, 'Reveal in Finder');
