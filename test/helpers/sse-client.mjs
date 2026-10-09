@@ -66,21 +66,47 @@ export function openSSE(url, { until = () => false, timeoutMs = 8000, graceMs = 
 
 export async function awaitWatcherLive(base, dirs, timeoutMs = 8000) {
   const files = dirs.map((dir, i) => path.join(dir, `watch-probe-${i}.md`));
-  const remaining = new Set(files.map((file) => path.basename(file)));
+  const names = files.map((file) => path.basename(file));
+  const unseen = new Set(names);
+  const unlinked = new Set(names);
+  const changes = new Map();
+  let live;
+  const liveSeen = new Promise((resolve) => { live = resolve; });
   const probe = openSSE(`${base}/api/events`, {
     until: (event) => {
-      remaining.delete(event.path);
-      return remaining.size === 0;
+      if (event.event === 'unlink') {
+        if (unseen.size === 0) unlinked.delete(event.path);
+      } else if (names.includes(event.path)) {
+        unseen.delete(event.path);
+        const seen = changes.get(event.path) || { rootKey: event.rootKey, count: 0 };
+        seen.count += 1;
+        changes.set(event.path, seen);
+        if (unseen.size === 0) live();
+      }
+      return unlinked.size === 0;
     },
     timeoutMs,
   });
   await probe.ready;
-  const timer = setInterval(() => files.forEach((file) => writeFileSync(file, String(Date.now()))), 50);
+  // Interval must exceed the server's 100ms debounce plus chokidar's 50ms throttle.
+  const timer = setInterval(() => files.forEach((file) => writeFileSync(file, String(Date.now()))), 300);
   try {
-    await probe.events;
+    await Promise.race([liveSeen, probe.events]);
+    clearInterval(timer);
+    const deadline = Date.now() + timeoutMs;
+    for (const [name, { rootKey, count }] of changes) {
+      // Each change event queues one history commit; deleting the file before it lands fails the commit.
+      const url = `${base}/api/roots/${rootKey}/history?path=${encodeURIComponent(name)}`;
+      for (;;) {
+        const entries = await (await fetch(url)).json().catch(() => null);
+        if (!Array.isArray(entries) || entries.length >= count || Date.now() > deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
   } finally {
     clearInterval(timer);
     files.forEach((file) => rmSync(file, { force: true }));
   }
-  if (remaining.size) throw new Error('file watcher never reported the probe write');
+  await probe.events;
+  if (unseen.size || unlinked.size) throw new Error('file watcher never reported the probe write and delete');
 }
