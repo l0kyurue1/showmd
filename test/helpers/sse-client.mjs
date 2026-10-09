@@ -78,9 +78,7 @@ export async function awaitWatcherLive(base, dirs, timeoutMs = 8000) {
         if (unseen.size === 0) unlinked.delete(event.path);
       } else if (names.includes(event.path)) {
         unseen.delete(event.path);
-        const seen = changes.get(event.path) || { rootKey: event.rootKey, count: 0 };
-        seen.count += 1;
-        changes.set(event.path, seen);
+        changes.set(event.path, event.rootKey);
         if (unseen.size === 0) live();
       }
       return unlinked.size === 0;
@@ -94,12 +92,12 @@ export async function awaitWatcherLive(base, dirs, timeoutMs = 8000) {
     await Promise.race([liveSeen, probe.events]);
     clearInterval(timer);
     const deadline = Date.now() + timeoutMs;
-    for (const [name, { rootKey, count }] of changes) {
+    for (const [name, rootKey] of changes) {
       // Each change event queues one history commit; deleting the file before it lands fails the commit.
       const url = `${base}/api/roots/${rootKey}/history?path=${encodeURIComponent(name)}`;
       for (;;) {
         const entries = await (await fetch(url)).json().catch(() => null);
-        if (!Array.isArray(entries) || entries.length >= count || Date.now() > deadline) break;
+        if (!Array.isArray(entries) || entries.length >= 1 || Date.now() > deadline) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }

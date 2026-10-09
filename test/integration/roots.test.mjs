@@ -349,11 +349,11 @@ test('deleting a file inside a live root does not close the root', async () => {
       const key = before.roots[0].key;
 
       await awaitWatcherLive(base, [root]);
-      const sse = collectSSEUntil(`${base}/api/events`, (e) => e.path === 'a.md' && (e.event === 'change' || e.event === 'unlink'), 2000);
+      const sse = collectSSEUntil(`${base}/api/events`, (e) => e.path === 'a.md' && e.event === 'unlink', 2000);
       await sse.ready;
       rmSync(filePath, { force: true });
       const events = await sse.events;
-      assert.ok(events.some((e) => e.path === 'a.md'), 'a.md unlink observed');
+      assert.ok(events.some((e) => e.path === 'a.md'), 'a.md deletion observed');
 
       const after = await (await fetch(`${base}/api/roots`)).json();
       assert.deepEqual(after.roots.map((r) => r.key), [key]);
