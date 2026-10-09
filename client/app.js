@@ -928,7 +928,7 @@ function renderRootNotOpen() {
   home.showLauncherNotice('This root is no longer open.', { sticky: true });
 }
 
-async function initRoot() {
+async function initRoot(settings) {
   rootInfo = currentRoute.rootKey ? findRootSummary(currentRoute.rootKey) : null;
   if (!rootInfo || rootInfo.dir == null) {
     if (bootData.routeError && bootData.routeError.kind === 'root_not_open') { renderRootNotOpen(); return; }
@@ -938,7 +938,7 @@ async function initRoot() {
   home.switcherEl.hidden = false;
   footerEl.hidden = false;
   home.renderSwitcher();
-  if (bootSettings) settingsView.renderCta(bootSettings);
+  if (settings) settingsView.renderCta(settings);
 }
 
 function applyQuery(q) {
@@ -1745,11 +1745,8 @@ function initTheme(settings) {
   });
 }
 
-let bootSettings = null;
-
 async function init() {
   const settings = bootData.settings || await fetchSettings();
-  bootSettings = settings;
   if (settings.platform) {
     const label = revealLabel(settings.platform);
     revealBtn.querySelector('.tip').textContent = label;
@@ -1784,7 +1781,7 @@ async function init() {
     viewState.dispatch({ type: 'launcher-open' });
     document.body.classList.remove('launcher-boot');
   }
-  await Promise.allSettled([initRoot(), (launcherBoot || bootSpace) ? Promise.resolve() : loadTree()]);
+  await Promise.allSettled([initRoot(settings), (launcherBoot || bootSpace) ? Promise.resolve() : loadTree()]);
   history.replaceState({ idx: 0 }, '', location.pathname + location.search + location.hash);
   if (bootSpace) {
     // a space boots off its own route: the tree and the opened document both
