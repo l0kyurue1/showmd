@@ -16,6 +16,7 @@ import { go } from '@codemirror/legacy-modes/mode/go';
 import { rust } from '@codemirror/legacy-modes/mode/rust';
 import { swift } from '@codemirror/legacy-modes/mode/swift';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
+import { snippetAt, countBefore, nthIndex, hintLines } from './scroll-sync.js';
 import { slashCompletions, slashTheme, slashGlide } from './editor-slash.js';
 import { blocksFacet, blocksRefresh, editBlockField, buildEditDecos } from './editor-blocks.js';
 
@@ -176,7 +177,11 @@ function insertLink(view) {
   return true;
 }
 
-function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks }) {
+const BLOCK_BREAK = /^\s*(?:#{1,6}\s|(?:-{3,}|\*{3,}|_{3,})\s*$)/;
+const FENCE_LINE = /^\s*(?:>\s*)*(?:`{3,}|~{3,}|\$\$)/;
+const QUOTE_PREFIX = /^(?:\s*>)*\s?/;
+
+function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks, scroller: scrollerOption }) {
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -212,16 +217,47 @@ function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks }) {
       ],
     }),
   });
+  const scroller = scrollerOption || view.scrollDOM;
+  let settleToken = 0;
+
+  function textHint(viewTop, x) {
+    const limit = viewTop + scroller.clientHeight;
+    for (const dy of [1, 12, 28, 56, 100]) {
+      const pos = view.posAtCoords({ x, y: viewTop + dy }, false);
+      const line = view.state.doc.lineAt(pos);
+      if (FENCE_LINE.test(line.text)) continue;
+      const code = view.domAtPos(line.from).node.parentElement?.closest('.cm-line')?.classList.contains('cm-lp-code');
+      const snip = snippetAt(line.text, code ? Math.max(pos - line.from, QUOTE_PREFIX.exec(line.text)[0].length) : pos - line.from, !code);
+      const rect = snip && view.coordsAtPos(line.from + snip.start);
+      if (!rect || rect.bottom <= viewTop || rect.top >= limit) continue;
+      const startPos = line.from + snip.start;
+      let chunkFrom = line.from;
+      if (!BLOCK_BREAK.test(line.text)) {
+        for (let n = line.number - 1; n >= 1 && n > line.number - 200; n--) {
+          const above = view.state.doc.line(n);
+          if (!above.text.trim() || BLOCK_BREAK.test(above.text)) break;
+          chunkFrom = above.from;
+        }
+      }
+      const nth = countBefore(view.state.doc.sliceString(chunkFrom, startPos + snip.text.length), snip.text, startPos - chunkFrom);
+      return { text: snip.text, offset: rect.top - viewTop, line: line.number, nth };
+    }
+    return null;
+  }
   return {
     getContent: () => view.state.doc.toString(),
     setContent: (text) => {
+      settleToken++;
       if (text === view.state.doc.toString()) return;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         annotations: programmatic.of(true),
       });
     },
-    setEdit: (on) => view.dispatch({ effects: editComp.reconfigure(on ? editExtensions : []) }),
+    setEdit: (on) => {
+      settleToken++;
+      view.dispatch({ effects: editComp.reconfigure(on ? editExtensions : []) });
+    },
     refreshBlocks: () => view.dispatch({ effects: blocksRefresh.of(null) }),
     wrap: (before, after) => wrapSelection(view, before, after),
     toggleBullet: () => toggleLinePrefix(view, '- ', /^[-*+] /),
@@ -230,7 +266,7 @@ function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks }) {
     toggleQuote: () => toggleLinePrefix(view, '> ', /^> /),
     undo: () => { histUndo(view); view.focus(); },
     redo: () => { histRedo(view); view.focus(); },
-    destroy: () => view.destroy(),
+    destroy: () => { settleToken++; view.destroy(); },
     insertLink: () => insertLink(view),
     jumpToLine: (n) => {
       const line = view.state.doc.line(Math.max(1, Math.min(n, view.state.doc.lines)));
@@ -241,6 +277,59 @@ function createEditor(parent, { doc, onChange, onSave, onToggleMode, blocks }) {
       view.focus();
     },
     focus: () => view.focus(),
+    viewportAnchor: (viewTop) => {
+      const left = view.contentDOM.getBoundingClientRect().left;
+      const pos = view.posAtCoords({ x: left + 1, y: viewTop + 1 }, false);
+      const block = view.lineBlockAt(pos);
+      const anchor = { line: view.state.doc.lineAt(block.from).number, offset: block.top + view.documentTop - viewTop };
+      const hint = textHint(viewTop, left + 1);
+      if (hint) anchor.hint = hint;
+      return anchor;
+    },
+    scrollToLine: (n, offset, hint) => {
+      const docState = view.state.doc;
+      let pos = docState.line(Math.max(1, Math.min(n, docState.lines))).from;
+      let glyph = false;
+      if (hint) {
+        const lines = hintLines(hint.line, hint.span, docState.lines);
+        const from = docState.line(lines.first).from;
+        const to = docState.line(lines.last).to;
+        const index = nthIndex(docState.sliceString(from, to), hint.text, hint.nth);
+        if (index >= 0) {
+          pos = from + index;
+          glyph = true;
+        }
+      }
+      const want = glyph ? hint.offset : offset;
+      view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: want }) });
+      // heights of lines never drawn are estimates; re-aim until the measured layout stops moving
+      const token = ++settleToken;
+      const stop = () => { settleToken++; };
+      scroller.addEventListener('wheel', stop, { once: true, passive: true });
+      scroller.addEventListener('keydown', stop, { once: true });
+      scroller.addEventListener('pointerdown', stop, { once: true });
+      let stable = 0;
+      const settle = (left) => {
+        const live = token === settleToken && view.dom.offsetParent !== null && pos <= view.state.doc.length;
+        if (live) {
+          const top = glyph ? view.coordsAtPos(pos)?.top : view.lineBlockAt(pos).top + view.documentTop;
+          const delta = top == null ? null : top - scroller.getBoundingClientRect().top - want;
+          if (delta !== null && Math.abs(delta) <= 0.5) stable++;
+          else {
+            stable = 0;
+            if (delta !== null) scroller.scrollTop += delta;
+          }
+          if (stable < 2 && left > 0) {
+            requestAnimationFrame(() => settle(left - 1));
+            return;
+          }
+        }
+        scroller.removeEventListener('wheel', stop);
+        scroller.removeEventListener('keydown', stop);
+        scroller.removeEventListener('pointerdown', stop);
+      };
+      settle(8);
+    },
   };
 }
 

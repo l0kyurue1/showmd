@@ -202,6 +202,15 @@ export function createPipeline(markdownit) {
     }
   });
 
+  // read mode blocks carry their source line so a mode switch can keep its place
+  md.core.ruler.push('block_lines', (state) => {
+    for (const token of state.tokens) {
+      if (token.level === 0 && token.nesting !== -1 && token.map && token.type !== 'inline') {
+        token.attrSet('data-line', String(token.map[0]));
+      }
+    }
+  });
+
   md.inline.ruler.before('html_inline', 'img_tag', (state, silent) => {
     if (state.src.charCodeAt(state.pos) !== 0x3C) return false;
     const m = IMG_TAG_RE.exec(state.src.slice(state.pos));
