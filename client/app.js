@@ -9,6 +9,7 @@ import { createInfoPanel } from './info-panel.js';
 import { createDocView } from './doc-view.js';
 import { createSaveFlow } from './save-flow.js';
 import { createTheme } from './theme.js';
+import { createNavHistory } from './nav-history.js';
 import { createPrintExport } from './print-export.js';
 import { createServerConnection } from './live-events.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
@@ -57,12 +58,6 @@ const pipeline = createPipeline(window.markdownit);
 const blocks = createBlockRenderer({ markdown: (src) => pipeline.render(src) });
 
 const state = { file: null, tree: [], navigation: { roots: [] }, navigationKind: null };
-// browser back/forward index into the files this tab has visited.
-// (pushState/back/forward are used below)
-let navIdx = 0;
-let navMax = 0;
-let restoringPopstate = false;
-let popstateTransition = Promise.resolve();
 // doc-mode only: current root summary (null on a dedicated `showmd skills`
 // server, or before a Root Space route resolves)
 let rootInfo = null;
@@ -747,7 +742,7 @@ async function applyRootPromotion({ newRoot, scope }) {
     if (saveAddress && saveAddress.route.rootKey === oldRootKey) {
       saveAddress = { ...saveAddress, route: { ...saveAddress.route, rootKey: newRoot.key } };
     }
-    history.replaceState({ idx: navIdx }, '', formatRouteContext(currentRoute));
+    navHistory.replace(formatRouteContext(currentRoute));
     home.renderSwitcher();
     if (save.isDirty()) await save.flush();
     if (currentRoute.space === 'settings') {
@@ -784,7 +779,7 @@ async function applyRootPromotion({ newRoot, scope }) {
     pipeline.setAssetUrl(docs().assetUrl);
     setFnameForFile(state.file);
   }
-  history.replaceState({ idx: navIdx }, '', formatRouteContext(currentRoute));
+  navHistory.replace(formatRouteContext(currentRoute));
   home.renderSwitcher();
   if (save.isDirty()) await save.flush();
   await loadTree();
@@ -1015,20 +1010,6 @@ function renderSidebar() {
   if (selectedEl) selectedEl.classList.add('kbd-on');
 }
 
-function canGoBack() { return navIdx > 0; }
-
-function setAriaDisabled(btn, disabled) {
-  if (disabled) btn.setAttribute('aria-disabled', 'true');
-  else btn.removeAttribute('aria-disabled');
-}
-
-function updateNavButtons() {
-  backBtn.classList.toggle('disabled', navIdx <= 0);
-  fwdBtn.classList.toggle('disabled', navIdx >= navMax);
-  setAriaDisabled(backBtn, navIdx <= 0);
-  setAriaDisabled(fwdBtn, navIdx >= navMax);
-}
-
 // Apply parsed routes identically after pushState and popstate.
 async function applyRoute(route) {
   if (route && route.space === 'settings') {
@@ -1090,10 +1071,7 @@ async function navigateTo(route) {
     if (save.isDirty()) return;
   }
   const url = formatRouteContext(route);
-  navIdx += 1;
-  navMax = navIdx;
-  history.pushState({ idx: navIdx }, '', url);
-  updateNavButtons();
+  navHistory.push(url);
   await applyRoute(route);
 }
 
@@ -1315,12 +1293,17 @@ fnameSymlink.addEventListener('click', () => {
   if (fnameSymlink.dataset.docId) navigate(fnameSymlink.dataset.docId);
 });
 
-// `disabled` here is a CSS class, not the attribute — the click still fires at
-// the ends of the stack, so the guard has to be explicit
-function goBack() { if (canGoBack()) history.back(); }
-function goForward() { if (navIdx < navMax) history.forward(); }
-backBtn.addEventListener('click', goBack);
-fwdBtn.addEventListener('click', goForward);
+const navHistory = createNavHistory({
+  history,
+  location,
+  backBtn,
+  fwdBtn,
+  win: window,
+  save,
+  applyRoute,
+  currentUrl: () => formatRouteContext(currentRoute),
+  report: setSaveState,
+});
 
 revealBtn.addEventListener('click', async () => {
   const p = isSettingsOpen(viewState.view) ? api.revealSettings() : (state.file ? docs().reveal(state.file) : null);
@@ -1401,8 +1384,8 @@ document.addEventListener('keydown', (e) => {
   if (e.shiftKey && key === 'h') { e.preventDefault(); navigateTo({ space: 'home' }); return; }
   if (key === 'o') { e.preventDefault(); openFileShortcut(); return; }
   if (home.launcherKeyboardActive()) return;
-  if (key === '[') { e.preventDefault(); goBack(); return; }
-  if (key === ']') { e.preventDefault(); goForward(); return; }
+  if (key === '[') { e.preventDefault(); navHistory.back(); return; }
+  if (key === ']') { e.preventDefault(); navHistory.forward(); return; }
   if (key === 'k') {
     e.preventDefault();
     if (sidebar.classList.contains('collapsed')) setSidebarCollapsed(false);
@@ -1532,7 +1515,7 @@ async function init() {
     document.body.classList.remove('launcher-boot');
   }
   await Promise.allSettled([initRoot(settings), (launcherBoot || bootSpace) ? Promise.resolve() : loadTree()]);
-  history.replaceState({ idx: 0 }, '', location.pathname + location.search + location.hash);
+  navHistory.replace(location.pathname + location.search + location.hash, 0);
   if (bootSpace) {
     // a space boots off its own route: the tree and the opened document both
     // come from the URL, so a reload lands exactly where the tab was
@@ -1550,44 +1533,9 @@ async function init() {
     }
   }
   if (bootRoute.space === 'settings') await enterSettingsView();
-  updateNavButtons();
   historyView.probe();
   serverConnection.connect();
-  window.addEventListener('popstate', (e) => {
-    const targetIdx = (e.state && typeof e.state.idx === 'number') ? e.state.idx : 0;
-    if (restoringPopstate) {
-      restoringPopstate = false;
-      navIdx = targetIdx;
-      navMax = Math.max(navMax, navIdx);
-      updateNavButtons();
-      return;
-    }
-    const sourceIdx = navIdx;
-    const sourceUrl = formatRouteContext(currentRoute);
-    const targetRoute = parseRouteContext(location.href);
-    popstateTransition = popstateTransition.then(async () => {
-      if (save.isDirty()) {
-        await save.flush();
-        if (save.isDirty()) {
-          const delta = sourceIdx - targetIdx;
-          if (delta) {
-            restoringPopstate = true;
-            history.go(delta);
-          } else {
-            history.replaceState({ idx: sourceIdx }, '', sourceUrl);
-          }
-          return;
-        }
-      }
-      navIdx = targetIdx;
-      navMax = Math.max(navMax, navIdx);
-      updateNavButtons();
-      await applyRoute(targetRoute);
-    }).catch((err) => {
-      console.error('showmd: could not apply route', err);
-      setSaveState('error', 'Navigation failed', 'could not open that page');
-    });
-  });
+  navHistory.listen();
 }
 
 init();
