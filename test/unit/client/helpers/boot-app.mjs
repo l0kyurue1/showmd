@@ -145,21 +145,32 @@ async function waitFor(cond, { timeout = 4000, interval = 5 } = {}) {
 }
 
 let bootCount = 0;
+let disposePreviousBoot = null;
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 
 function createTimerControl(deferredDelays) {
   const delays = new Set(deferredDelays);
   const pending = new Map();
+  const live = new Set();
   let nextId = 0;
   const setTimeoutControlled = (fn, delay = 0, ...args) => {
-    if (!delays.has(delay)) return nativeSetTimeout(fn, delay, ...args);
+    if (!delays.has(delay)) {
+      const handle = nativeSetTimeout(() => { live.delete(handle); fn(...args); }, delay);
+      live.add(handle);
+      return handle;
+    }
     const id = { deferredTimer: ++nextId };
     pending.set(id, { fn, delay, args });
     return id;
   };
   const clearTimeoutControlled = (id) => {
-    if (!pending.delete(id)) nativeClearTimeout(id);
+    if (!pending.delete(id)) { live.delete(id); nativeClearTimeout(id); }
+  };
+  const dispose = () => {
+    pending.clear();
+    for (const handle of live) nativeClearTimeout(handle);
+    live.clear();
   };
   const run = async (delay) => {
     const selected = [...pending].filter(([, timer]) => delay === undefined || timer.delay === delay);
@@ -168,7 +179,7 @@ function createTimerControl(deferredDelays) {
     return selected.length;
   };
   const count = (delay) => [...pending.values()].filter((timer) => delay === undefined || timer.delay === delay).length;
-  return { setTimeoutControlled, clearTimeoutControlled, run, count };
+  return { setTimeoutControlled, clearTimeoutControlled, run, count, dispose };
 }
 
 // Boot the real client under jsdom with browser seams and captured window errors.
@@ -179,6 +190,7 @@ export async function bootApp({
   recents, deferredTimeouts = [],
 } = {}) {
   bootCount += 1;
+  if (disposePreviousBoot) disposePreviousBoot();
   // Synthesize a fixed Root Space for legacy root-only fixtures.
   const resolvedRoute = route !== undefined ? route : (root ? { space: 'root', rootKey: TEST_ROOT_KEY } : null);
   const resolvedRoots = roots !== undefined ? roots
@@ -239,6 +251,7 @@ export async function bootApp({
   const EventSourceFake = createFakeEventSource();
   const matchMediaFake = createFakeMatchMedia();
   const timerControl = createTimerControl(deferredTimeouts);
+  disposePreviousBoot = timerControl.dispose;
   if (systemDark) matchMediaFake('(prefers-color-scheme: dark)').matches = true;
 
   window.fetch = fetchFake;

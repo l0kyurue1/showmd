@@ -724,11 +724,11 @@ test('a root promotion rebases and saves a dirty document at its prefixed addres
     newRoot: { key: NEW_KEY, dir: '/tmp', name: 'tmp', url: `/r/${NEW_KEY}/` },
     scope: { rootKey: NEW_KEY, scopePath: 'proj' },
   });
-  await h.waitFor(() => h.fetch.calls.some((call) => call.method === 'PUT'));
+  const promotedPut = (call) => call.method === 'PUT' && call.pathname === rootScopedPath('raw', NEW_KEY);
+  await h.waitFor(() => h.fetch.calls.some(promotedPut));
   await h.waitFor(() => h.document.querySelector('[data-nav-id="proj/b.md"]'));
 
-  const put = h.fetch.calls.find((call) => call.method === 'PUT');
-  assert.equal(put.pathname, rootScopedPath('raw', NEW_KEY));
+  const put = h.fetch.calls.find(promotedPut);
   assert.equal(put.url.searchParams.get('path'), 'proj/a.md');
   assert.equal(editor.getContent(), '# unsaved promoted A');
   assert.equal(h.window.location.pathname, `/r/${NEW_KEY}/proj/a.md`);
