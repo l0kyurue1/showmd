@@ -40,8 +40,8 @@ for (const name of readdirSync(path.join(ROOT, 'client')).sort()) {
 }
 
 // checks token names, not values, to avoid false positives on unrelated 3/10/22px in chrome rules
-const DERIVED_GEOMETRY = ['--task-box', '--task-hang'];
-const SHARED_GEOMETRY = ['--list-indent', '--task-gap', '--quote-bar', '--quote-pad'];
+const DERIVED_GEOMETRY = ['--task-box', '--task-hang', '--bullet-size', '--bullet-gap', '--bullet-lift'];
+const SHARED_GEOMETRY = ['--list-indent', '--task-gap', '--quote-bar', '--quote-pad', '--hr-w', '--task-pad', '--task-top'];
 const CONSUMERS = ['client/app.css', 'client/editor-src.js'];
 // the editor bundles several modules; the contract is shared across them, so each
 // consumer is a bundle, not a file.

@@ -233,3 +233,44 @@ test('top-level blocks carry their body line, nested blocks do not', () => {
   assert.doesNotMatch(html, /<li data-line/);
   assert.match(html, /<code[^>]*data-line="7"/);
 });
+
+const SPACER = '<p class="md-empty-para"></p>';
+const spacers = (src) => pipeline().render(src).split(SPACER).length - 1;
+
+test('empty paragraphs: floor(N/2) spacers for N blank lines between blocks', () => {
+  assert.equal(spacers('foo\n\nbar'), 0);
+  assert.equal(spacers('foo\n\n\nbar'), 1);
+  assert.equal(spacers('foo\n\n\n\nbar'), 1);
+  assert.equal(spacers('foo\n\n\n\n\nbar'), 2);
+  assert.equal(spacers('foo\n \n \t\n\nbar'), 1);
+  assert.match(pipeline().render('foo\n\n\nbar'), /<p data-line="0">foo<\/p>\n<p class="md-empty-para"><\/p>\n<p data-line="3">bar<\/p>/);
+});
+
+test('empty paragraphs: blank lines inside code, lists, or at the edges add none', () => {
+  assert.equal(spacers('```\na\n\n\n\n\nb\n```'), 0);
+  assert.equal(spacers('    a\n\n\n\n    b'), 0);
+  assert.equal(spacers('\n\n\n\nfoo\n\n\n\n'), 0);
+  assert.equal(pipeline().render('- a\n\n\n\n- b'), '<ul data-line="0">\n<li>\n<p>a</p>\n</li>\n<li>\n<p>b</p>\n</li>\n</ul>\n');
+});
+
+test('empty paragraphs: count only the blank lines directly before the next block', () => {
+  assert.equal(spacers('- a\n\n\n\nbar'), 1);
+  assert.equal(spacers('1. a\n\n\nbar'), 1);
+  assert.equal(spacers('foo\n- a\n\n\n\n\nbar'), 2);
+  assert.equal(spacers('<div>x</div>\n\n\n\nbar'), 1);
+  assert.equal(spacers('[x]: http://a\n\n\n\nbar'), 1);
+});
+
+test('empty paragraphs: none at the document start, after frontmatter, or at the end', () => {
+  assert.equal(spacers('\n\n\n\nbar'), 0);
+  assert.equal(spacers(pipeline().parseFrontmatter('---\na: b\n---\n\n\n\nbar').body), 0);
+  assert.equal(spacers('bar\n\n\n\n'), 0);
+});
+
+test('empty paragraphs: spacers leave data-line of real blocks unchanged', () => {
+  const html = pipeline().render('# t\n\n\n\n\npara\n\n\nlast');
+  assert.match(html, /<h1 id="t" data-line="0"/);
+  assert.match(html, /<p data-line="5">para/);
+  assert.match(html, /<p data-line="8">last/);
+  assert.equal((html.match(/data-line/g) || []).length, 3);
+});
