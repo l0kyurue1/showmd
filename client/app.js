@@ -44,6 +44,9 @@ const IS_MAC = isMacPlatform(navigator);
 const kbdLabel = (label) => shortcutLabel(label, IS_MAC);
 if (!IS_MAC) {
   for (const el of document.querySelectorAll('kbd')) el.textContent = kbdLabel(el.textContent);
+  for (const el of document.querySelectorAll('[aria-keyshortcuts]')) {
+    el.setAttribute('aria-keyshortcuts', el.getAttribute('aria-keyshortcuts').replace('Meta', 'Control'));
+  }
 }
 
 const pipeline = createPipeline(window.markdownit);
@@ -501,7 +504,7 @@ const agentSwitcherMenu = agentSwitcherEl.querySelector('.root-switcher-menu');
 const footerEl = document.createElement('div');
 footerEl.className = 'nav-footer';
 footerEl.hidden = true;
-footerEl.innerHTML = `<span class="nav-footer-left"><button type="button" class="nav-footer-agents">${AGENTS_SVG}<span class="lbl">Agents</span><span class="tip">Agents</span></button><span class="nav-footer-divider"></span><button type="button" class="nav-footer-skills">${SPARKLES_SVG}<span class="lbl">Skills</span><span class="tip">Skills</span></button></span><button type="button" class="nav-footer-gear" aria-label="Settings">${GEAR_SVG}<span class="tip">Settings</span></button>`;
+footerEl.innerHTML = `<span class="nav-footer-left"><button type="button" class="nav-footer-agents" aria-label="Agents">${AGENTS_SVG}<span class="lbl">Agents</span><span class="tip" aria-hidden="true">Agents</span></button><span class="nav-footer-divider"></span><button type="button" class="nav-footer-skills" aria-label="Skills">${SPARKLES_SVG}<span class="lbl">Skills</span><span class="tip" aria-hidden="true">Skills</span></button></span><button type="button" class="nav-footer-gear" aria-label="Settings">${GEAR_SVG}<span class="tip" aria-hidden="true">Settings</span></button>`;
 const agentsFooterBtn = footerEl.querySelector('.nav-footer-agents');
 const skillsFooterBtn = footerEl.querySelector('.nav-footer-skills');
 const settingsFooterBtn = footerEl.querySelector('.nav-footer-gear');
@@ -1289,7 +1292,9 @@ const historyView = createHistoryView({
 function setSidebarCollapsed(collapsed) {
   sidebar.classList.toggle('collapsed', collapsed);
   sidebarBtn.classList.toggle('on', !collapsed);
-  sidebarTip.innerHTML = (collapsed ? 'Expand sidebar' : 'Collapse sidebar') + ` <kbd>${kbdLabel('⌘\\')}</kbd>`;
+  const sidebarLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  sidebarTip.innerHTML = sidebarLabel + ` <kbd>${kbdLabel('⌘\\')}</kbd>`;
+  sidebarBtn.setAttribute('aria-label', sidebarLabel);
   localStorage.setItem('showmd-sidebar-collapsed', collapsed ? '1' : '');
 }
 function toggleSidebar() { setSidebarCollapsed(!sidebar.classList.contains('collapsed')); }
@@ -1734,7 +1739,11 @@ let bootSettings = null;
 async function init() {
   const settings = bootData.settings || await fetchSettings();
   bootSettings = settings;
-  if (settings.platform) revealBtn.querySelector('.tip').textContent = revealLabel(settings.platform);
+  if (settings.platform) {
+    const label = revealLabel(settings.platform);
+    revealBtn.querySelector('.tip').textContent = label;
+    revealBtn.setAttribute('aria-label', label);
+  }
   initTheme(settings);
   applyFontPreset(settings.fontPreset);
   applyFontSize(settings.fontSize);
