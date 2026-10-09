@@ -8,6 +8,7 @@ import { createHistoryView } from './history-view.js';
 import { createDocView } from './doc-view.js';
 import { createSaveFlow, SAVE_DEBOUNCE_MS as INFO_REFRESH_MS } from './save-flow.js';
 import { createTheme } from './theme.js';
+import { createPrintExport } from './print-export.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
 import { followRestart } from './restart-follow.js';
 import { createHomeView, SKILLS_EMPTY_NOTICE, AGENTS_EMPTY_NOTICE } from './home-view.js';
@@ -1523,7 +1524,7 @@ revealBtn.addEventListener('click', async () => {
   }
 });
 
-exportBtn.addEventListener('click', () => exportPdf());
+exportBtn.addEventListener('click', () => printExport.exportPdf());
 sourceBtn.addEventListener('click', () => setMode('source'));
 editBtn.addEventListener('click', () => setMode('edit'));
 readBtn.addEventListener('click', () => setMode('read'));
@@ -1602,7 +1603,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (key === 'p') {
     e.preventDefault();
-    exportPdf();
+    printExport.exportPdf();
     return;
   }
   if (cmEditor && editorHost.contains(document.activeElement)) return;
@@ -1668,46 +1669,14 @@ document.addEventListener('keydown', (e) => {
   applyIntent(intent);
 });
 
-let pendingPrintRestore = null;
-
-function finishExportPdf() {
-  if (!pendingPrintRestore) return;
-  const { prevTitle, prevMode } = pendingPrintRestore;
-  pendingPrintRestore = null;
-  document.title = prevTitle;
-  if (prevMode) theme.set(prevMode, { persist: false });
-}
-window.addEventListener('afterprint', finishExportPdf);
-
-window.addEventListener('beforeprint', () => {
-  for (const a of doc.querySelectorAll('a.wikilink[href]')) {
-    a.dataset.printHref = a.getAttribute('href');
-    if (a.dataset.file === state.file) a.setAttribute('href', '#doc');
-    else a.removeAttribute('href');
-  }
+const printExport = createPrintExport({
+  win: window,
+  doc,
+  theme,
+  prepareReadView: async () => { await setMode('read'); await docView.whenRendered(); },
+  refreshDiagrams: () => blocks.refreshThemeIn(doc),
+  getFile: () => state.file,
 });
-window.addEventListener('afterprint', () => {
-  for (const a of doc.querySelectorAll('a.wikilink[data-print-href]')) {
-    a.setAttribute('href', a.dataset.printHref);
-    delete a.dataset.printHref;
-  }
-});
-
-async function exportPdf() {
-  await setMode('read');
-  await docView.whenRendered();
-  const wasDark = theme.isDark();
-  const prevMode = wasDark ? theme.mode() : null;
-  if (wasDark) {
-    theme.set('light', { persist: false });
-    await blocks.refreshThemeIn(doc);
-  }
-  const prevTitle = document.title;
-  if (state.file) document.title = state.file.split('/').pop().replace(/\.(md|markdown)$/i, '');
-  pendingPrintRestore = { prevTitle, prevMode };
-  window.print();
-  finishExportPdf();
-}
 
 function applyFontPreset(preset) {
   document.documentElement.style.setProperty('--doc-font', (FONT_PRESETS[preset] || FONT_PRESETS.default).family);
