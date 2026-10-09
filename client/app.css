@@ -438,6 +438,7 @@ header .fname {
   padding: 3px 9px 3px 7px; border-radius: 999px; background: var(--side);
   border: 1px solid var(--line); font-size: 11.5px; color: var(--muted);
 }
+.chip-live { display: flex; align-items: center; gap: 6px; }
 .chip .tip:empty { display: none; }
 .chip:hover .tip { opacity: 1; transform: translateX(calc(-50% + var(--shift))) translateY(0); transition-delay: .35s; }
 header .chip { margin-left: 6px; flex-shrink: 0; }
