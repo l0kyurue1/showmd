@@ -11,6 +11,8 @@ const HEADER_VARIANT = { scope: 'sec-scope', group: 'sec-group', dir: undefined 
 
 const NAV_OPEN_DEBOUNCE_MS = 120;
 
+const ARROW_KEY_ROLES = /^(tab|menuitem|menuitemradio|menuitemcheckbox|option|radio|slider|spinbutton|listbox|combobox|grid|tree)$/;
+
 export function createSidebarTree({
   doc, sidebar, chevronSvg, searchShortcut, viewState, getModel, navigate, isEditorFocused,
   timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (t) => clearTimeout(t) },
@@ -25,12 +27,42 @@ export function createSidebarTree({
   const searchClearBtn = searchEl.querySelector('.nav-search-clear');
   const navBody = doc.createElement('div');
   navBody.className = 'nav-body';
+  navBody.setAttribute('aria-label', 'Files');
+  let pointerDown = false;
+  navBody.addEventListener('mousedown', () => { pointerDown = true; });
+  navBody.addEventListener('click', () => { pointerDown = false; });
+  navBody.addEventListener('focus', () => {
+    const byPointer = pointerDown;
+    pointerDown = false;
+    if (byPointer) return;
+    selectRenderedRowIfNone();
+  });
+
+  function selectRenderedRowIfNone() {
+    if (navItemFor(nav.selected) || nav.rows.length === 0) return;
+    const open = getModel().file;
+    const target = nav.rows.find((r) => r.id === open && navItemFor(r.id)) || nav.rows[0];
+    setNavSelected(target.id);
+  }
+
+  function setTreeExposed(exposed) {
+    if (exposed) {
+      navBody.setAttribute('role', 'tree');
+      navBody.tabIndex = 0;
+    } else {
+      navBody.removeAttribute('role');
+      navBody.removeAttribute('tabindex');
+      navBody.removeAttribute('aria-activedescendant');
+    }
+  }
 
   function appendGlideList(items) {
     const list = doc.createElement('div');
     list.className = 'list';
+    list.setAttribute('role', 'none');
     const glide = doc.createElement('div');
     glide.className = 'glide';
+    glide.setAttribute('aria-hidden', 'true');
     list.appendChild(glide);
     for (const { el: li, contentEl, onClick } of items) {
       li.addEventListener('click', onClick);
@@ -223,9 +255,24 @@ export function createSidebarTree({
 
   const ITEM_MAKER = { skill: makeSkillItem, project: makeAgentProjectItem };
 
+  function markTreeitem(el, row, index, expandable) {
+    el.id = `nav-item-${index}`;
+    el.setAttribute('role', 'treeitem');
+    el.setAttribute('aria-level', String(row.depth + 1));
+    el.setAttribute('aria-selected', row.current ? 'true' : 'false');
+    if (expandable) el.setAttribute('aria-expanded', row.collapsed ? 'false' : 'true');
+  }
+
+  function syncActiveDescendant() {
+    const el = navItemFor(nav.selected);
+    if (el && el.id) navBody.setAttribute('aria-activedescendant', el.id);
+    else navBody.removeAttribute('aria-activedescendant');
+  }
+
   function paintRows(rows) {
     let batch = [];
     let batchKey = null;
+    let index = 0;
     const flush = () => {
       if (batch.length) navBody.appendChild(appendGlideList(batch));
       batch = [];
@@ -234,12 +281,16 @@ export function createSidebarTree({
     for (const row of rows) {
       if (row.kind in HEADER_VARIANT) {
         flush();
-        navBody.appendChild(makeDisclosureHeader(row, HEADER_VARIANT[row.kind]));
+        const header = makeDisclosureHeader(row, HEADER_VARIANT[row.kind]);
+        markTreeitem(header, row, index++, true);
+        navBody.appendChild(header);
         continue;
       }
       if (row.listKey !== batchKey) flush();
       batchKey = row.listKey;
-      batch.push((ITEM_MAKER[row.kind] || makeFileItem)(row));
+      const item = (ITEM_MAKER[row.kind] || makeFileItem)(row);
+      markTreeitem(item.el, row, index++, row.collapsible);
+      batch.push(item);
     }
     flush();
   }
@@ -248,14 +299,18 @@ export function createSidebarTree({
     const { model, file, kind } = getModel();
     nav = nextNav(nav, { type: 'sync-rows' }, { model, file, hideFile: isSettingsOpen(viewState.view) });
     navBody.replaceChildren();
+    setTreeExposed(false);
     if (nav.rows.length === 0) {
       if (nav.query) { renderNavEmpty('No matches'); return; }
       if (EMPTY_CATALOG_NOTICE[kind]) { renderNavEmpty(EMPTY_CATALOG_NOTICE[kind]); return; }
     }
     paintRows(nav.rows);
+    setTreeExposed(nav.rows.length > 0);
+    if (doc.activeElement === navBody) selectRenderedRowIfNone();
     // selection lives in state, so it survives the markup being thrown away
     const selectedEl = navItemFor(nav.selected);
     if (selectedEl) selectedEl.classList.add('kbd-on');
+    syncActiveDescendant();
   }
 
   function navItemFor(id) {
@@ -272,6 +327,7 @@ export function createSidebarTree({
       el.classList.add('kbd-on');
       el.scrollIntoView({ block: 'nearest' });
     }
+    syncActiveDescendant();
   }
 
   // arrowing onto a file opens it after a short pause, so holding the key to
@@ -292,18 +348,20 @@ export function createSidebarTree({
     if (intent.autoOpen) navOpenTimer = timers.set(() => navigate(intent.row.id), NAV_OPEN_DEBOUNCE_MS);
   }
 
-  function focusBlocksSidebarNav() {
+  function focusBlocksSidebarNav(key) {
     const el = doc.activeElement;
     if (!el || el === doc.body) return false;
+    if (key === 'Enter' || key === ' ') return el !== navBody;
     if (isEditorFocused(el)) return true;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return true;
-    return el.isContentEditable;
+    if (el.isContentEditable) return true;
+    return el !== navBody && ARROW_KEY_ROLES.test(el.getAttribute('role') || '');
   }
 
   doc.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(e.key)) return;
-    if (sidebar.classList.contains('collapsed') || focusBlocksSidebarNav()) return;
+    if (sidebar.classList.contains('collapsed') || focusBlocksSidebarNav(e.key)) return;
     const intent = keyIntent(nav.rows, e.key, { selected: nav.selected, file: getModel().file });
     if (!intent) return;
     e.preventDefault();
@@ -325,6 +383,7 @@ export function createSidebarTree({
     },
     showNotice(text) {
       navBody.replaceChildren();
+      setTreeExposed(false);
       return renderNavEmpty(text);
     },
   };
