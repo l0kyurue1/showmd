@@ -1183,14 +1183,14 @@ test('popstate failure is reported and does not wedge navigation', async () => {
   const origError = h.window.console.error;
   console.error = (...args) => logged.push(args);
   try {
-    h.fetch.on('GET', (url) => /\/tree$/.test(url.pathname), () => { throw new Error('tree down'); });
+    h.fetch.on('GET', (url) => url.pathname.endsWith('/tree'), () => { throw new Error('tree down'); });
     h.window.history.pushState({ idx: 1 }, '', `/r/${KEY}/docs/c.md?scope=docs`);
     h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 1 } }));
     await h.waitFor(() => h.document.getElementById('save-chip-dot').className.includes('error') && logged.length > 0);
   } finally {
     console.error = origError;
   }
-  h.fetch.on('GET', (url) => /\/tree$/.test(url.pathname), () => ({ body: ['a.md', 'docs/c.md'] }));
+  h.fetch.on('GET', (url) => url.pathname.endsWith('/tree'), () => ({ body: ['a.md', 'docs/c.md'] }));
   h.window.history.pushState({ idx: 2 }, '', `/r/${KEY}/a.md`);
   h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 2 } }));
   await h.waitFor(() => h.document.title === 'a.md');
