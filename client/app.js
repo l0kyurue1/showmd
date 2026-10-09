@@ -195,7 +195,7 @@ function jumpToHeading(item, idx) {
   if (viewState.view.mode === 'read') {
     const headings = [...doc.querySelectorAll('h1, h2, h3, h4, h5, h6')];
     const target = headings[idx];
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (target) target.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
   } else if (cmEditor) {
     cmEditor.jumpToLine(item.line);
   }
