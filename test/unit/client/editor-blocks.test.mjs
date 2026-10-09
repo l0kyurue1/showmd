@@ -6,6 +6,7 @@ import { EditorState, StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { forceParsing, syntaxTree } from '@codemirror/language';
+import { cursorCharRight, cursorCharLeft } from '@codemirror/commands';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true });
 for (const [name, value] of Object.entries({
@@ -268,6 +269,21 @@ test('setext headings get the same line class as ATX headings', () => {
     } finally {
       editor.destroy();
     }
+  }
+});
+
+test('a setext underline collapses unless the cursor is on the heading or its underline', () => {
+  const doc = 'Title\n=====\nbody\n\ntail';
+  const rule = (view) => [...view.dom.querySelectorAll('.cm-line')].map((el) => el.classList.contains('cm-lp-setext-rule'));
+  const { editor, view } = editorAt(doc, doc.length);
+  try {
+    assert.deepEqual(rule(view).slice(0, 3), [false, true, false]);
+    view.dispatch({ selection: { anchor: 8 } });
+    assert.deepEqual(rule(view).slice(0, 3), [false, false, false]);
+    view.dispatch({ selection: { anchor: 2 } });
+    assert.deepEqual(rule(view).slice(0, 3), [false, false, false]);
+  } finally {
+    editor.destroy();
   }
 });
 
@@ -1138,4 +1154,94 @@ test('ordered markers number by position from the start number and always end in
   assert.deepEqual(orderedLabels('3. a\n7. b\n1. c\n\ntail'), ['3. ', '4. ', '5. ']);
   assert.deepEqual(orderedLabels('1) a\n2) b\n\ntail'), ['1. ', '2. ']);
   assert.deepEqual(orderedLabels('1. a\n   1. x\n   1. y\n1. b\n\ntail'), ['1. ', '1. ', '2. ', '2. ']);
+});
+
+const lineTexts = (view) => [...view.dom.querySelectorAll('.cm-line')].map((el) => el.textContent);
+
+test('a table renders through the block renderer until the cursor enters it', () => {
+  const sources = [];
+  const doc = '| a | b |\n| - | - |\n| 1 | 2 |\n\ntail';
+  const { editor, view } = editorAt(doc, doc.length, { renderBlockInto: async (el, request) => { sources.push(request.source); } });
+  try {
+    assert.equal(view.dom.querySelectorAll('.cm-lp-embed').length, 1);
+    assert.deepEqual(sources, ['| a | b |\n| - | - |\n| 1 | 2 |']);
+    assert.equal(lineTexts(view).some((text) => text.includes('| a |')), false);
+    view.dispatch({ selection: { anchor: 3 } });
+    assert.equal(view.dom.querySelectorAll('.cm-lp-embed').length, 0);
+    assert.equal(lineTexts(view)[0], '| a | b |');
+  } finally {
+    editor.destroy();
+  }
+});
+
+test('a soft line break shows as a space until the cursor enters the paragraph', () => {
+  const doc = 'one\ntwo\nthree\n\ntail';
+  const { editor, view } = editorAt(doc, doc.length);
+  try {
+    assert.equal(lineTexts(view)[0], 'one two three');
+    view.dispatch({ selection: { anchor: 5 } });
+    assert.deepEqual(lineTexts(view).slice(0, 3), ['one', 'two', 'three']);
+    view.dispatch({ selection: { anchor: doc.length } });
+    assert.equal(lineTexts(view)[0], 'one two three');
+    assert.equal(view.state.doc.toString(), doc);
+  } finally {
+    editor.destroy();
+  }
+});
+
+test('hard breaks stay visible when the soft breaks around them join', () => {
+  const doc = 'a  \nb\\\nc\nd\n\ntail';
+  const { editor, view } = editorAt(doc, doc.length);
+  try {
+    assert.deepEqual(lineTexts(view).slice(0, 3), ['a', 'b', 'c d']);
+  } finally {
+    editor.destroy();
+  }
+});
+
+test('lists and quotes keep their source line breaks', () => {
+  for (const above of ['- a\n  b', '> a\n> b\n>\n> c']) {
+    const doc = above + '\n\ntail';
+    const { editor, view } = editorAt(doc, above.startsWith('>') ? above.length : doc.length, stubBlocks);
+    try {
+      assert.equal(lineTexts(view).some((text) => text.includes('a b')), false, above);
+      if (above.startsWith('>')) assert.equal(lineTexts(view).some((text) => text.endsWith('a')) && lineTexts(view).some((text) => text.endsWith('b')), true);
+    } finally {
+      editor.destroy();
+    }
+  }
+});
+
+test('the gap under a joined paragraph sits on the joined line', () => {
+  const doc = 'a\nb\n- x\n\ntail';
+  const { editor, view } = editorAt(doc, doc.length);
+  try {
+    const first = view.dom.querySelector('.cm-line');
+    assert.equal(first.textContent, 'a b');
+    assert.match(first.getAttribute('style'), /padding-bottom/);
+  } finally {
+    editor.destroy();
+  }
+});
+
+test('entering a joined paragraph by keyboard un-joins it with the caret at its start', () => {
+  const doc = 'zero\n\none\ntwo\n\ntail';
+  const { editor, view } = editorAt(doc, 4);
+  try {
+    assert.equal(lineTexts(view).includes('one two'), true);
+    cursorCharRight(view);
+    assert.equal(view.state.selection.main.head, 6);
+    assert.equal(lineTexts(view).includes('one two'), false);
+    assert.equal(lineTexts(view).includes('one'), true);
+    const heads = [];
+    for (let i = 0; i < 4; i++) {
+      cursorCharRight(view);
+      heads.push(view.state.selection.main.head);
+    }
+    assert.deepEqual(heads, [7, 8, 9, 10]);
+    cursorCharLeft(view);
+    assert.equal(view.state.selection.main.head, 9);
+  } finally {
+    editor.destroy();
+  }
 });
