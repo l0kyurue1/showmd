@@ -7,6 +7,7 @@ import { startMarquee, stopMarquee, reducedMotion } from './marquee.js';
 import { createHistoryView } from './history-view.js';
 import { createDocView } from './doc-view.js';
 import { createSaveFlow, SAVE_DEBOUNCE_MS as INFO_REFRESH_MS } from './save-flow.js';
+import { createTheme } from './theme.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
 import { followRestart } from './restart-follow.js';
 import { createHomeView, SKILLS_EMPTY_NOTICE, AGENTS_EMPTY_NOTICE } from './home-view.js';
@@ -757,6 +758,19 @@ async function saveSetting(key, value) {
   }
 }
 
+const theme = createTheme({
+  media: matchMedia('(prefers-color-scheme: dark)'),
+  root: document.documentElement,
+  storage: localStorage,
+  persist: (mode) => saveSetting('colorMode', mode),
+  onChange: () => {
+    if (viewState.view.mode === 'edit' && cmEditor) cmEditor.refreshBlocks();
+    else if (viewState.view.mode === 'read' && state.file) blocks.refreshThemeIn(doc);
+  },
+  button: document.getElementById('theme-btn'),
+});
+window.showmdSetTheme = theme.set;
+
 const settingsView = createSettingsView({
   root: settingsEl,
   ctaEl: updateCtaEl,
@@ -765,7 +779,7 @@ const settingsView = createSettingsView({
   saveSetting,
   chevronSvg: CHEVRON_SVG,
   positionTip,
-  setTheme,
+  setTheme: theme.set,
   applyFontPreset,
   applyFontSize,
   getRootKey: () => currentRoute.rootKey,
@@ -1654,35 +1668,6 @@ document.addEventListener('keydown', (e) => {
   applyIntent(intent);
 });
 
-function resolveTheme(colorMode, systemDark) {
-  return colorMode === 'system' ? (systemDark ? 'dark' : 'light') : colorMode;
-}
-
-// Adopt a legacy local theme once when settings have no saved color mode.
-function initialColorMode(settings, legacy) {
-  const mode = settings.colorMode || 'system';
-  if (legacy && mode === 'system') return { colorMode: legacy, persist: true };
-  return { colorMode: mode, persist: false };
-}
-
-const THEME_MEDIA = matchMedia('(prefers-color-scheme: dark)');
-let colorMode = 'system';
-
-function applyTheme() {
-  document.documentElement.dataset.theme = resolveTheme(colorMode, THEME_MEDIA.matches);
-}
-
-// the only writer of the theme: anything else that flips it (the ?lab panel)
-// goes through here, or its diagrams keep the old theme's colors
-function setTheme(next, { persist = true } = {}) {
-  colorMode = next;
-  applyTheme();
-  if (persist) saveSetting('colorMode', next);
-  if (viewState.view.mode === 'edit' && cmEditor) cmEditor.refreshBlocks();
-  else if (viewState.view.mode === 'read' && state.file) blocks.refreshThemeIn(doc);
-}
-window.showmdSetTheme = setTheme;
-
 let pendingPrintRestore = null;
 
 function finishExportPdf() {
@@ -1690,7 +1675,7 @@ function finishExportPdf() {
   const { prevTitle, prevMode } = pendingPrintRestore;
   pendingPrintRestore = null;
   document.title = prevTitle;
-  if (prevMode) setTheme(prevMode, { persist: false });
+  if (prevMode) theme.set(prevMode, { persist: false });
 }
 window.addEventListener('afterprint', finishExportPdf);
 
@@ -1711,10 +1696,10 @@ window.addEventListener('afterprint', () => {
 async function exportPdf() {
   await setMode('read');
   await docView.whenRendered();
-  const wasDark = resolveTheme(colorMode, THEME_MEDIA.matches) === 'dark';
-  const prevMode = wasDark ? colorMode : null;
+  const wasDark = theme.isDark();
+  const prevMode = wasDark ? theme.mode() : null;
   if (wasDark) {
-    setTheme('light', { persist: false });
+    theme.set('light', { persist: false });
     await blocks.refreshThemeIn(doc);
   }
   const prevTitle = document.title;
@@ -1732,19 +1717,6 @@ function applyFontSize(size) {
   if (typeof size === 'number' && Number.isFinite(size)) document.documentElement.style.setProperty('--doc-size', `${size}px`);
 }
 
-function initTheme(settings) {
-  const legacy = localStorage.getItem('showmd-theme');
-  if (legacy) localStorage.removeItem('showmd-theme');
-  const initial = initialColorMode(settings, legacy);
-  colorMode = initial.colorMode;
-  if (initial.persist) saveSetting('colorMode', colorMode);
-  applyTheme();
-  THEME_MEDIA.addEventListener('change', () => { if (colorMode === 'system') applyTheme(); });
-  document.getElementById('theme-btn').addEventListener('click', () => {
-    setTheme(resolveTheme(colorMode, THEME_MEDIA.matches) === 'dark' ? 'light' : 'dark');
-  });
-}
-
 async function init() {
   const settings = bootData.settings || await fetchSettings();
   if (settings.platform) {
@@ -1752,7 +1724,7 @@ async function init() {
     revealBtn.querySelector('.tip').textContent = label;
     revealBtn.setAttribute('aria-label', label);
   }
-  initTheme(settings);
+  theme.init(settings);
   applyFontPreset(settings.fontPreset);
   applyFontSize(settings.fontSize);
   if (new URLSearchParams(location.search).has('lab')) import('./theme-lab.js');
