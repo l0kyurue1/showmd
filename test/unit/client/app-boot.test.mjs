@@ -1404,6 +1404,117 @@ test('ArrowDown in the sidebar selects the next row and opens it after the debou
   assert.equal(rawCalls().length, 1);
 });
 
+test('sidebar tree exposes tree roles and the active row', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md', 'docs/c.md'],
+    files: { 'a.md': '# A', 'b.md': '# B', 'docs/c.md': '# C' },
+    deferredTimeouts: [120],
+  });
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  assert.equal(tree.getAttribute('role'), 'tree');
+  assert.equal(tree.getAttribute('tabindex'), '0');
+  assert.equal(tree.hasAttribute('aria-activedescendant'), false);
+
+  const item = (id) => h.document.querySelector(`#sidebar li[data-nav-id="${id}"]`);
+  const rows = () => [...h.document.querySelectorAll('#sidebar li[data-nav-id], #sidebar .sec.disclosure')];
+  assert.ok(rows().length >= 4);
+  for (const r of rows()) {
+    assert.equal(r.getAttribute('role'), 'treeitem');
+    assert.match(r.getAttribute('aria-level'), /^[1-9]\d*$/);
+    assert.equal(r.getAttribute('aria-selected'), r === item('a.md') ? 'true' : 'false');
+  }
+  assert.equal(item('a.md').hasAttribute('aria-expanded'), false);
+
+  const header = () => h.document.querySelector('#sidebar .sec.disclosure');
+  assert.equal(header().getAttribute('aria-expanded'), 'true');
+  h.click(header());
+  assert.equal(header().getAttribute('aria-expanded'), 'false');
+
+  h.keydown('ArrowDown');
+  const marked = h.document.querySelector('#sidebar .kbd-on');
+  assert.equal(marked.dataset.navId, 'b.md');
+  const activeId = tree.getAttribute('aria-activedescendant');
+  assert.ok(activeId);
+  assert.equal(h.document.getElementById(activeId), marked);
+});
+
+test('Enter on a focused toolbar button is not taken by the sidebar', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+  });
+  const fire = (el, key) => {
+    const ev = new h.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  };
+  const btn = h.document.getElementById('panel-btn');
+  btn.focus();
+  assert.equal(h.document.activeElement, btn);
+  assert.equal(fire(btn, 'Enter'), false);
+  assert.equal(fire(btn, ' '), false);
+  assert.equal(fire(btn, 'ArrowDown'), true);
+
+  const combo = h.document.createElement('div');
+  combo.setAttribute('role', 'slider');
+  combo.tabIndex = 0;
+  h.document.body.appendChild(combo);
+  combo.focus();
+  assert.equal(fire(combo, 'ArrowDown'), false);
+
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  tree.focus();
+  assert.equal(fire(tree, 'ArrowDown'), true);
+  assert.equal(fire(tree, 'Enter'), true);
+});
+
+test('keyboard focus on the sidebar tree selects the open file\'s row', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+    deferredTimeouts: [120],
+  });
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  const marked = () => [...h.document.querySelectorAll('#sidebar .kbd-on')].map((el) => el.dataset.navId);
+
+  tree.dispatchEvent(new h.window.MouseEvent('mousedown', { bubbles: true }));
+  tree.focus();
+  assert.deepEqual(marked(), []);
+  tree.blur();
+
+  tree.focus();
+  assert.deepEqual(marked(), ['a.md']);
+  const activeId = tree.getAttribute('aria-activedescendant');
+  assert.equal(h.document.getElementById(activeId).dataset.navId, 'a.md');
+  assert.equal(h.pendingDeferredTimers(), 0);
+});
+
+test('an empty sidebar is not exposed as a tree', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+  });
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  const input = h.document.querySelector('#sidebar input');
+  const type = (v) => {
+    input.value = v;
+    input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  };
+  tree.focus();
+  assert.ok(tree.hasAttribute('aria-activedescendant'));
+  type('zzz');
+  assert.equal(tree.hasAttribute('role'), false);
+  assert.equal(tree.hasAttribute('tabindex'), false);
+  assert.equal(tree.hasAttribute('aria-activedescendant'), false);
+  type('');
+  assert.equal(tree.getAttribute('role'), 'tree');
+  assert.equal(tree.getAttribute('tabindex'), '0');
+});
+
 test('a collapsed sidebar is inert', async () => {
   const h = await bootApp({
     root: { dir: '/tmp/proj', name: 'proj' },
@@ -1421,6 +1532,24 @@ test('a collapsed sidebar is inert', async () => {
   assert.equal(sidebar.classList.contains('collapsed'), false);
   assert.equal(sidebar.inert, false);
   assert.equal(h.document.activeElement, h.document.querySelector('#sidebar input'));
+});
+
+test('filtering away the selected row leaves no stale active descendant', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+    deferredTimeouts: [120],
+  });
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  h.keydown('ArrowDown');
+  assert.equal(h.document.getElementById(tree.getAttribute('aria-activedescendant')).dataset.navId, 'b.md');
+  const input = h.document.querySelector('#sidebar input');
+  input.value = 'a.';
+  input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  const id = tree.getAttribute('aria-activedescendant');
+  assert.ok(id === null || h.document.getElementById(id)?.dataset.navId === 'a.md');
+  assert.equal(h.document.querySelector('#sidebar .kbd-on')?.dataset.navId ?? null, id === null ? null : 'a.md');
 });
 
 test('search filters the sidebar and Escape clears it', async () => {
@@ -1505,3 +1634,22 @@ test('a rootless boot starts with the sidebar collapsed and inert', async () => 
   assert.equal(sidebar.inert, true);
 });
 
+test('a refresh that removes the focused tree\'s active row selects the open file\'s row', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+    deferredTimeouts: [120],
+  });
+  const tree = h.document.querySelector('#sidebar .nav-body');
+  tree.focus();
+  h.keydown('ArrowDown');
+  assert.equal(h.document.getElementById(tree.getAttribute('aria-activedescendant')).dataset.navId, 'b.md');
+  const input = h.document.querySelector('#sidebar input');
+  input.value = 'a.';
+  input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  assert.equal(h.document.activeElement, tree);
+  assert.equal(h.document.querySelector('#sidebar .kbd-on')?.dataset.navId, 'a.md');
+  assert.equal(h.document.getElementById(tree.getAttribute('aria-activedescendant')).dataset.navId, 'a.md');
+  assert.equal(h.document.title, 'a.md');
+});

@@ -202,6 +202,7 @@ nav li.last-visited::after {
   border-radius: 1px; background: var(--muted); opacity: .4;
 }
 nav .sec.kbd-on { background: var(--hover); color: var(--ink); }
+.nav-body:focus-visible { outline: none; }
 nav .sec {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 300;
   color: var(--muted-faint); padding: 10px 10px 6px;
