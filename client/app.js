@@ -1829,7 +1829,10 @@ async function init() {
       navMax = Math.max(navMax, navIdx);
       updateNavButtons();
       await applyRoute(targetRoute);
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error('showmd: could not apply route', err);
+      setSaveState('error', 'Navigation failed', 'could not open that page');
+    });
   });
 }
 

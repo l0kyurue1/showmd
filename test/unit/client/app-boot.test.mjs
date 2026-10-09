@@ -1171,3 +1171,27 @@ test('failed setting save shows on the save chip', async () => {
     assert.equal(h.document.getElementById('save-chip-dot').className.includes('error'), true, label);
   }
 });
+
+test('popstate failure is reported and does not wedge navigation', async () => {
+  const h = await bootApp({
+    route: { space: 'root', rootKey: KEY, documentPath: 'a.md' },
+    roots: rootRoutes(),
+    tree: ['a.md', 'docs/c.md'],
+    files: { 'a.md': '# A', 'docs/c.md': '# C' },
+  });
+  const logged = [];
+  const origError = h.window.console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    h.fetch.on('GET', (url) => /\/tree$/.test(url.pathname), () => { throw new Error('tree down'); });
+    h.window.history.pushState({ idx: 1 }, '', `/r/${KEY}/docs/c.md?scope=docs`);
+    h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 1 } }));
+    await h.waitFor(() => h.document.getElementById('save-chip-dot').className.includes('error') && logged.length > 0);
+  } finally {
+    console.error = origError;
+  }
+  h.fetch.on('GET', (url) => /\/tree$/.test(url.pathname), () => ({ body: ['a.md', 'docs/c.md'] }));
+  h.window.history.pushState({ idx: 2 }, '', `/r/${KEY}/a.md`);
+  h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 2 } }));
+  await h.waitFor(() => h.document.title === 'a.md');
+});
