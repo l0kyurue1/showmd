@@ -18,7 +18,7 @@ function testFiles(dir) {
 }
 
 const files = testFiles(path.join(root, process.argv[2]));
-const run = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+const run = spawnSync(process.execPath, ['--test', '--test-timeout=60000', ...files], { stdio: 'inherit' });
 if (run.status !== 0) {
   console.error(`[run-tests] ${process.argv[2]} exited status=${run.status} signal=${run.signal}`);
 }
