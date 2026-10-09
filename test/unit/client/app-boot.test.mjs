@@ -1078,3 +1078,27 @@ test('save chip is a polite live region', async () => {
   assert.equal(chip.contains(h.document.getElementById('save-chip-tip')), false);
   assert.equal(chip.contains(h.document.getElementById('save-chip-text')), true);
 });
+
+test('back and forward expose aria-disabled', async () => {
+  const h = await bootApp({
+    route: { space: 'root', rootKey: KEY, documentPath: 'a.md' },
+    roots: rootRoutes(),
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '[[b]]', 'b.md': '# B' },
+  });
+  const back = h.document.getElementById('back-btn');
+  const fwd = h.document.getElementById('fwd-btn');
+  assert.equal(back.getAttribute('aria-disabled'), 'true');
+  assert.equal(fwd.getAttribute('aria-disabled'), 'true');
+
+  h.click(h.document.querySelector('a.wikilink'));
+  await h.waitFor(() => h.document.title === 'b.md');
+  assert.equal(back.hasAttribute('aria-disabled'), false);
+  assert.equal(fwd.getAttribute('aria-disabled'), 'true');
+
+  h.window.history.pushState({ idx: 0 }, '', `/r/${KEY}/a.md`);
+  h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 0 } }));
+  await h.waitFor(() => h.document.title === 'a.md');
+  assert.equal(back.getAttribute('aria-disabled'), 'true');
+  assert.equal(fwd.hasAttribute('aria-disabled'), false);
+});
