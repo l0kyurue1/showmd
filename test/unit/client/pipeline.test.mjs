@@ -141,7 +141,7 @@ test('img tag: alt and title survive, event handlers do not', () => {
 
 test('img tag: renders inline mid-paragraph and self-closing', () => {
   const p = pipeline();
-  assert.match(p.render('before <img src="a.png" width="20"> after'), /<p>before <img [^>]*> after<\/p>/);
+  assert.match(p.render('before <img src="a.png" width="20"> after'), /<p[^>]*>before <img [^>]*> after<\/p>/);
   assert.match(p.render('<img src="a.png" />'), /<img /);
 });
 
@@ -161,7 +161,7 @@ test('raw html: everything outside the whitelist is still escaped', () => {
 
 test('wrapper: multi-line <p align="center"> centers its image', () => {
   const html = pipeline().render('<p align="center">\n  <img src="logo.png" width="200">\n</p>');
-  assert.match(html, /^<div align="center">/);
+  assert.match(html, /^<div align="center"[^>]*>/);
   assert.match(html, /<img src="logo\.png" width="200"/);
   assert.match(html, /<\/div>\s*$/);
   assert.doesNotMatch(html, /<p align/);
@@ -169,8 +169,8 @@ test('wrapper: multi-line <p align="center"> centers its image', () => {
 
 test('wrapper: single-line form and headings', () => {
   const p = pipeline();
-  assert.match(p.render('<h1 align="center">showmd</h1>'), /<h1 align="center">showmd<\/h1>/);
-  assert.match(p.render('<div align="center"><img src="a.png" width="8"></div>'), /<div align="center"><img [^>]*><\/div>/);
+  assert.match(p.render('<h1 align="center">showmd</h1>'), /<h1 align="center"[^>]*>showmd<\/h1>/);
+  assert.match(p.render('<div align="center"><img src="a.png" width="8"></div>'), /<div align="center"[^>]*><img [^>]*><\/div>/);
 });
 
 test('wrapper: markdown inside a wrapper is still parsed', () => {
@@ -195,32 +195,41 @@ test('br tag: <br> becomes a line break', () => {
 
 test('heading ids: slugified, lowercased, punctuation stripped', () => {
   const html = pipeline().render('# Hello, World!\n\n## Foo Bar_Baz');
-  assert.match(html, /<h1 id="hello-world">/);
-  assert.match(html, /<h2 id="foo-barbaz">/);
+  assert.match(html, /<h1 id="hello-world"[^>]*>/);
+  assert.match(html, /<h2 id="foo-barbaz"[^>]*>/);
 });
 
 test('heading ids: CJK characters preserved', () => {
   const html = pipeline().render('# 你好 世界');
-  assert.match(html, /<h1 id="你好-世界">/);
+  assert.match(html, /<h1 id="你好-世界"[^>]*>/);
 });
 
 test('heading ids: duplicates deduped with -1, -2', () => {
   const html = pipeline().render('# Section\n\n## Section\n\n### Section');
-  assert.match(html, /<h1 id="section">/);
-  assert.match(html, /<h2 id="section-1">/);
-  assert.match(html, /<h3 id="section-2">/);
+  assert.match(html, /<h1 id="section"[^>]*>/);
+  assert.match(html, /<h2 id="section-1"[^>]*>/);
+  assert.match(html, /<h3 id="section-2"[^>]*>/);
 });
 
 test('heading ids: generated suffixes cannot collide with explicit headings', () => {
   const html = pipeline().render('# X\n\n## X\n\n### X-1');
-  assert.match(html, /<h1 id="x">/);
-  assert.match(html, /<h2 id="x-1">/);
-  assert.match(html, /<h3 id="x-1-1">/);
+  assert.match(html, /<h1 id="x"[^>]*>/);
+  assert.match(html, /<h2 id="x-1"[^>]*>/);
+  assert.match(html, /<h3 id="x-1-1"[^>]*>/);
 });
 
 test('heading ids: counter resets per render call', () => {
   const p = pipeline();
   p.render('# Section\n\n## Section');
   const html = p.render('# Section');
-  assert.match(html, /<h1 id="section">/);
+  assert.match(html, /<h1 id="section"[^>]*>/);
+});
+
+test('top-level blocks carry their body line, nested blocks do not', () => {
+  const html = pipeline().render('# T\n\npara\n\n- a\n- b\n\n```js\nx\n```');
+  assert.match(html, /<h1[^>]*data-line="0"/);
+  assert.match(html, /<p data-line="2">/);
+  assert.match(html, /<ul data-line="4">/);
+  assert.doesNotMatch(html, /<li data-line/);
+  assert.match(html, /<code[^>]*data-line="7"/);
 });

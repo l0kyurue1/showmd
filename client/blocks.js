@@ -171,12 +171,12 @@ export function createBlockRenderer({
 
   async function renderMermaidIn(rootEl) {
     const targets = [
-      ...[...rootEl.querySelectorAll('pre > code.language-mermaid')].map((code) => ({ source: code.textContent, el: code.parentElement })),
+      ...[...rootEl.querySelectorAll('pre > code.language-mermaid')].map((code) => ({ source: code.textContent, el: code.parentElement, line: code.dataset.line })),
       ...[...rootEl.querySelectorAll('.mermaid-diagram, .mermaid-error')]
         .filter((el) => mermaidSources.has(el))
-        .map((el) => ({ source: mermaidSources.get(el), el })),
+        .map((el) => ({ source: mermaidSources.get(el), el, line: el.dataset.line })),
     ];
-    for (const { source, el } of targets) {
+    for (const { source, el, line } of targets) {
       let holder;
       try {
         const svg = await mermaidSVG(source);
@@ -187,6 +187,7 @@ export function createBlockRenderer({
         reportError('showmd: mermaid render failed', err);
         holder = mermaidErrorEl(source, err);
       }
+      if (line !== undefined) holder.dataset.line = line;
       mermaidSources.set(holder, source);
       el.replaceWith(holder);
     }

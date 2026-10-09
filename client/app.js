@@ -330,6 +330,7 @@ const HOME_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" st
 const docView = createDocView({
   doc, pipeline, blocks, save,
   getEditor: () => cmEditor,
+  scroller: main,
   chevronSvg: CHEVRON_SVG,
   skillMetaHTML,
   renderProperties,
@@ -355,6 +356,7 @@ async function setMode(mode) {
             onSave: () => save.flush(),
             onToggleMode: () => setMode(MODE_CYCLE[viewState.view.mode]),
             blocks,
+            scroller: main,
           }));
         }
         cmEditor = await editorCreating;
@@ -365,14 +367,19 @@ async function setMode(mode) {
         return;
       }
     }
+    const anchor = viewState.view.mode === 'read' ? docView.viewportAnchor(main.getBoundingClientRect().top) : null;
     // unhide before setEdit: edit decorations only cover the editor's visible
     // ranges, which are empty while the host is display:none
     viewState.dispatch({ type: 'mode', mode });
     cmEditor.setEdit(mode === 'edit');
+    // CodeMirror clamps yMargin to the scroller height; a read block taller than the viewport would overshoot
+    if (anchor) cmEditor.scrollToLine(anchor.line, Math.max(anchor.offset, -main.clientHeight), anchor.hint);
     cmEditor.focus();
   } else {
+    const anchor = cmEditor ? cmEditor.viewportAnchor(main.getBoundingClientRect().top) : null;
     await docView.renderDoc(currentContent());
     viewState.dispatch({ type: 'mode', mode });
+    if (anchor) docView.scrollToLine(anchor.line, anchor.offset, anchor.hint);
     if (save.isDirty()) save.flush();
   }
 }

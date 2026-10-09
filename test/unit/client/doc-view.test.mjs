@@ -23,7 +23,7 @@ function fakePipeline() {
       renderCalls.push(body);
       return body.split('\n').map((line, i) => {
         const m = /^-\s+\[([ xX])\]\s+(.*)$/.exec(line);
-        if (!m) return line ? `<p>${line}</p>` : '';
+        if (!m) return line ? `<p data-line="${i}">${line}</p>` : '';
         const checked = m[1] !== ' ' ? ' checked' : '';
         return `<p><input type="checkbox" class="${TASK_CLASS}" data-line="${i}"${checked}> ${m[2]}</p>`;
       }).join('\n');
@@ -44,16 +44,42 @@ function mount() {
   };
   const scheduleCalls = [];
   const save = { schedule: () => scheduleCalls.push(true) };
+  const scroller = { scrollTop: 0, getBoundingClientRect: () => ({ top: 0 }) };
   const docView = createDocView({
-    doc, pipeline, blocks, save,
+    doc, pipeline, blocks, save, scroller,
     getEditor: () => null,
     chevronSvg: '<svg class="chevron"></svg>',
     skillMetaHTML: () => '',
     renderProperties: () => {},
     refreshInfo: () => {},
   });
-  return { doc, docView, blockRenderCalls, scheduleCalls };
+  return { doc, docView, blockRenderCalls, scheduleCalls, scroller };
 }
+
+// jsdom has no layout: stack every block 10px tall in document order
+function layoutBlocks(doc) {
+  doc.querySelectorAll('[data-line]').forEach((el, i) => {
+    el.getBoundingClientRect = () => ({ top: i * 10, bottom: i * 10 + 10 });
+  });
+}
+
+test('viewportAnchor and scrollToLine map body lines to editor lines across frontmatter', () => {
+  const { doc, docView, scroller } = mount();
+  docView.renderDoc('---\ntitle: x\n---\nfirst\nsecond');
+  layoutBlocks(doc);
+  assert.deepEqual(docView.viewportAnchor(12), { line: 5, offset: -2 });
+  docView.scrollToLine(5, 0);
+  assert.equal(scroller.scrollTop, 10);
+  docView.scrollToLine(2, 0);
+  assert.equal(scroller.scrollTop, 0);
+});
+
+test('viewportAnchor without frontmatter is body line plus one', () => {
+  const { doc, docView } = mount();
+  docView.renderDoc('first\nsecond');
+  layoutBlocks(doc);
+  assert.deepEqual(docView.viewportAnchor(0), { line: 1, offset: 0 });
+});
 
 test('toggleTaskAt computes the right line in a document with frontmatter', () => {
   const { docView } = mount();
