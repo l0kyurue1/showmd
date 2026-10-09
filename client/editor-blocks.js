@@ -1,4 +1,4 @@
-import { StateField, StateEffect, Facet } from '@codemirror/state';
+import { StateField, StateEffect, Facet, RangeSetBuilder } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { mathSpans, markSpans, TASK_CLASS, toggleTaskMark, frontmatterEndLine } from './syntax.js';
@@ -9,16 +9,42 @@ const blockRefreshes = new WeakMap();
 
 // matches the UA default list-style-type chain read mode inherits: disc, circle,
 // square, square...
-const BULLETS = ['•', '◦', '▪'];
+const BULLETS = ['disc', 'circle', 'square'];
+
+// read mode numbers by position from the list's start number and always shows "."
+function orderedNumber(doc, item) {
+  let index = 0;
+  let first = item;
+  for (let s = item.prevSibling; s; s = s.prevSibling) {
+    if (s.name === 'ListItem') { index++; first = s; }
+  }
+  const m = /^\d+/.exec(doc.sliceString(first.from, first.to));
+  return (m ? parseInt(m[0], 10) : 1) + index;
+}
 
 class BulletWidget extends WidgetType {
-  constructor(mark) { super(); this.mark = mark; }
-  eq(other) { return other.mark === this.mark; }
+  constructor(shape, number) { super(); this.shape = shape; this.number = number; }
+  eq(other) { return other.shape === this.shape && other.number === this.number; }
   toDOM() {
     const s = document.createElement('span');
-    s.className = 'cm-lp-bullet';
-    s.textContent = this.mark;
+    s.className = this.shape ? `cm-lp-bullet cm-lp-bullet-${this.shape}` : 'cm-lp-bullet cm-lp-bullet-number';
+    if (!this.shape) {
+      const n = document.createElement('span');
+      n.textContent = `${this.number}. `;
+      s.append(n);
+    }
     return s;
+  }
+}
+
+class SeparatorWidget extends WidgetType {
+  constructor(height) { super(); this.height = height; }
+  eq(other) { return other.height === this.height; }
+  toDOM() {
+    const d = document.createElement('div');
+    d.className = 'cm-lp-sep';
+    d.setAttribute('style', `height:${this.height}`);
+    return d;
   }
 }
 
@@ -203,20 +229,33 @@ function hasBlankBetween(doc, from, to) {
   return false;
 }
 
-// Fold adjacent read-mode margins into one measured edit-mode gap.
-// Attach it to the earlier block; blank source lines already add height.
+const collapse = (a, b) => (a === b ? a : `max(${a}, ${b})`);
+const LISTS = new Set(['BulletList', 'OrderedList']);
+
+function blockEdge(node, fmEnd, doc) {
+  if (node.from < fmEnd) return null;
+  if (doc && node.name === 'Paragraph') {
+    const text = doc.sliceString(node.from, node.to);
+    const spans = text.includes('$$') ? mathSpans(text) : [];
+    if (spans.length === 1 && spans[0].display && spans[0].from === 0 && spans[0].to === text.length) return BLOCK;
+  }
+  return BLOCK_EDGE[node.name] || null;
+}
+
+// Blocks split by blank lines get their gap from separator widgets instead.
+// --tail-pad is a task item's bottom padding, which read mode stacks under the list margin.
 function blockGaps(tree, doc, fmEnd) {
   const gaps = new Map();
   let prev = null;
   for (let n = tree.topNode.firstChild; n; n = n.nextSibling) {
-    const edge = n.from < fmEnd ? null : BLOCK_EDGE[n.name];
+    const edge = blockEdge(n, fmEnd, doc);
     if (!edge) { prev = null; continue; }
-    if (prev) {
-      const raw = prev.bottom === edge[0] ? prev.bottom : `max(${prev.bottom}, ${edge[0]})`;
-      const gap = hasBlankBetween(doc, prev.to, n.from) ? `max(0px, calc(${raw} - var(--doc-lh)))` : raw;
+    if (prev && !hasBlankBetween(doc, prev.to, n.from)) {
+      const raw = collapse(prev.bottom, edge[0]);
+      const gap = prev.list ? `calc(${raw} + var(--tail-pad, 0px))` : raw;
       gaps.set(prev.from, { gap, line: doc.lineAt(prev.to).from });
     }
-    prev = { from: n.from, to: n.to, bottom: edge[1] };
+    prev = { from: n.from, to: n.to, bottom: edge[1], list: LISTS.has(n.name) };
   }
   return gaps;
 }
@@ -281,7 +320,7 @@ const editBlockField = StateField.define({
   update: (value, tr) => {
     const refresh = tr.effects.some((effect) => effect.is(blocksRefresh));
     if (refresh) blockRefreshes.set(tr.state.facet(blocksFacet), {});
-    return tr.docChanged || tr.selection || refresh ? buildBlockDecos(tr.state) : value;
+    return tr.docChanged || tr.selection || refresh || syntaxTree(tr.state) !== syntaxTree(tr.startState) ?buildBlockDecos(tr.state) : value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -289,6 +328,129 @@ const editBlockField = StateField.define({
 function frontmatterEnd(doc) {
   const n = frontmatterEndLine((i) => doc.line(i).text, doc.lines);
   return n ? doc.line(n).to : 0;
+}
+
+function hardBreakMarker(doc, node) {
+  if (doc.sliceString(node.from, node.from + 1) === '\\') return { from: node.from, to: node.from + 1, spaces: false };
+  return { from: node.to - 3, to: node.to - 1, spaces: true };
+}
+
+function hardBreakAround(state, pos) {
+  const line = state.doc.lineAt(pos);
+  let found = null;
+  syntaxTree(state).iterate({
+    from: line.from,
+    to: line.to + 1,
+    enter: (node) => {
+      if (node.name === 'HardBreak' && node.from >= line.from && node.from <= line.to) found = hardBreakMarker(state.doc, node);
+    },
+  });
+  return found;
+}
+
+function forEachHardBreak(view, fn) {
+  for (const range of view.visibleRanges) {
+    syntaxTree(view.state).iterate({
+      from: range.from,
+      to: range.to,
+      enter: (node) => { if (node.name === 'HardBreak') fn(hardBreakMarker(view.state.doc, node)); },
+    });
+  }
+}
+
+function hardBreakAtoms(view) {
+  const builder = new RangeSetBuilder();
+  forEachHardBreak(view, (m) => {
+    builder.add(m.from, Math.min(view.state.doc.length, view.state.doc.lineAt(m.from).to + 1), Decoration.mark({}));
+  });
+  return builder.finish();
+}
+
+// Read mode collapses margins around floor(N/2) empty paragraphs; an even run's last gap
+// sits under its empty paragraph. Neighbours without a read margin keep a full line.
+function separatorHeights(run, prevEdge, nextEdge) {
+  const count = Math.ceil(run.size / 2);
+  if (!prevEdge || !nextEdge) return { heights: Array(count).fill('var(--doc-lh)'), pad: null };
+  const lastGap = collapse('var(--p-mb)', nextEdge[0]);
+  const odd = run.size % 2 === 1;
+  const heights = [];
+  for (let j = 0; j < count; j++) {
+    const first = j === 0;
+    const last = odd && j === count - 1;
+    if (first && last) heights.push(collapse(prevEdge[1], nextEdge[0]));
+    else if (first) heights.push(prevEdge[1]);
+    else if (last) heights.push(lastGap);
+    else heights.push('var(--p-mb)');
+  }
+  return { heights, pad: odd ? null : lastGap };
+}
+
+function continuationLine(state) {
+  const { main } = state.selection;
+  if (!main.empty) return 0;
+  const line = state.doc.lineAt(main.head);
+  if (line.number < 2 || line.text.trim() !== '') return 0;
+  return / {2}$/.test(state.doc.line(line.number - 1).text) ? line.number : 0;
+}
+
+function buildSeparators(state, continuation = 0) {
+  const doc = state.doc;
+  const fmEnd = frontmatterEnd(doc);
+  const kinds = new Map();
+  const decos = [];
+  const atoms = [];
+  const addRun = (before, after) => {
+    let start = doc.lineAt(Math.max(before.from, before.to - 1)).number + 1;
+    const end = after ? doc.lineAt(after.from).number - 1 : doc.lines;
+    if (end < start || before.from < fmEnd || (!after && end === start)) return;
+    for (let n = start; n <= end; n++) if (doc.line(n).text.trim() !== '') return;
+    if (start === continuation && before.name === 'Paragraph' && / {2}$/.test(doc.line(start - 1).text)) {
+      kinds.set(start, { kind: 'continuation' });
+      start++;
+      if (end < start || (!after && end === start)) return;
+    }
+    const run = { size: end - start + 1, start, end };
+    const edge = blockEdge(before, fmEnd, doc);
+    const { heights, pad } = after
+      ? separatorHeights(run, edge, blockEdge(after, fmEnd, doc))
+      : { heights: [edge ? edge[1] : 'var(--doc-lh)'], pad: null };
+    if (pad) decos.push(Decoration.line({ attributes: { style: `padding-bottom:${pad}` } }).range(doc.line(end).from));
+    for (let i = start; i <= end; i++) {
+      if (!after) {
+        if (i === end && run.size === 2) kinds.set(i, { kind: 'empty', run });
+        if (i > start) continue;
+      } else if ((i - start) % 2 === 1) { kinds.set(i, { kind: 'empty', run }); continue; }
+      kinds.set(i, { kind: 'sep', run });
+      const line = doc.line(i);
+      decos.push(Decoration.replace({ widget: new SeparatorWidget(heights[(i - start) / 2]), block: true }).range(line.from, line.to));
+      atoms.push(Decoration.mark({}).range(line.from - 1, line.to + 1));
+    }
+  };
+  let before = null;
+  for (let c = syntaxTree(state).topNode.firstChild; c; c = c.nextSibling) {
+    if (before) addRun(before, c);
+    before = c;
+  }
+  if (before) addRun(before, null);
+  return { kinds, continuation, decos: Decoration.set(decos, true), atoms: Decoration.set(atoms, true) };
+}
+
+const separatorField = StateField.define({
+  create: (state) => buildSeparators(state),
+  update: (value, tr) => {
+    const structural = tr.docChanged || syntaxTree(tr.state) !== syntaxTree(tr.startState);
+    const continuation = tr.docChanged ? continuationLine(tr.state) : value.continuation && continuationLine(tr.state) === value.continuation ? value.continuation : 0;
+    return structural || continuation !== value.continuation ? buildSeparators(tr.state, continuation) : value;
+  },
+  provide: (f) => [
+    EditorView.decorations.from(f, (value) => value.decos),
+    EditorView.atomicRanges.from(f, (value) => () => value.atoms),
+  ],
+});
+
+function paragraphKind(state, lineNumber) {
+  const info = state.field(separatorField, false);
+  return (info && info.kinds.get(lineNumber)) || null;
 }
 
 function buildEditDecos(view) {
@@ -355,6 +517,11 @@ function buildEditDecos(view) {
               attributes: { style: `padding-left:${pad};text-indent:calc(-1 * ${hang})` },
             });
             decos.push(hangLine.range(line.from));
+            if (isTask) {
+              decos.push(Decoration.line({ class: 'cm-lp-task-first' }).range(line.from));
+              const itemEnd = doc.lineAt(node.node.parent.to).from;
+              decos.push(Decoration.line({ class: 'cm-lp-task-last' }).range(itemEnd));
+            }
             hide(line.from, node.from);
             // a task item's text parses as Task, not Paragraph
             for (let c = node.node.parent && node.node.parent.firstChild; c; c = c.nextSibling) {
@@ -369,22 +536,54 @@ function buildEditDecos(view) {
             if (onActiveLine(node.from, node.to)) break;
             if (isTask) { hide(node.from, node.to + spaceAfter(node.to)); break; }
             const mark = doc.sliceString(node.from, node.to);
-            const glyph = /^[-*+]$/.test(mark) ? BULLETS[Math.min(depth, BULLETS.length) - 1] : mark;
-            decos.push(Decoration.replace({ widget: new BulletWidget(glyph) })
+            const shape = /^[-*+]$/.test(mark) ? BULLETS[Math.min(depth, BULLETS.length) - 1] : null;
+            decos.push(Decoration.replace({ widget: new BulletWidget(shape, shape ? mark : orderedNumber(doc, node.node.parent)) })
               .range(node.from, node.to + spaceAfter(node.to)));
             break;
           }
           case 'TaskMarker': {
             if (onActiveLine(node.from, node.to)) break;
             const checked = /x/i.test(doc.sliceString(node.from, node.to));
+            if (checked) {
+              const item = node.node.parent.parent;
+              for (let n = doc.lineAt(item.from).number; n <= doc.lineAt(item.to).number; n++) {
+                decos.push(Decoration.line({ class: 'cm-lp-task-done' }).range(doc.line(n).from));
+              }
+            }
             decos.push(Decoration.replace({ widget: new TaskWidget(checked) }).range(node.from, node.to + spaceAfter(node.to)));
+            break;
+          }
+          case 'HardBreak': {
+            const marker = hardBreakMarker(doc, node);
+            decos.push(Decoration.replace({}).range(marker.from, marker.to));
+            break;
+          }
+          case 'ATXHeading1':
+          case 'ATXHeading2':
+          case 'ATXHeading3':
+          case 'ATXHeading4':
+          case 'ATXHeading5':
+          case 'ATXHeading6':
+          case 'SetextHeading1':
+          case 'SetextHeading2': {
+            const level = Math.min(Number(node.name.slice(-1)), 4);
+            decos.push(Decoration.line({ class: `cm-lp-h${level}` }).range(doc.lineAt(node.from).from));
             break;
           }
           case 'HorizontalRule':
             if (!onActiveLine(node.from, node.to)) {
+              decos.push(Decoration.line({ class: 'cm-lp-hr-line' }).range(doc.lineAt(node.from).from));
               decos.push(Decoration.replace({ widget: new HRWidget() }).range(node.from, node.to));
             }
             break;
+          case 'BulletList':
+          case 'OrderedList': {
+            const item = node.node.parent;
+            if (item && item.name === 'ListItem' && item.nextSibling && item.nextSibling.name === 'ListItem') {
+              decos.push(Decoration.line({ class: 'cm-lp-nested-end' }).range(doc.lineAt(node.to).from));
+            }
+            break;
+          }
           case 'FencedCode': {
             const first = doc.lineAt(node.from);
             const last = doc.lineAt(node.to);
@@ -413,6 +612,10 @@ export {
   blocksRefresh,
   editBlockField,
   buildEditDecos,
+  separatorField,
+  paragraphKind,
+  hardBreakAround,
+  hardBreakAtoms,
   scanMath,
   scanMark,
   scanBlockMath,

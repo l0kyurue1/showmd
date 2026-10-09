@@ -211,6 +211,29 @@ export function createPipeline(markdownit) {
     }
   });
 
+  // Typora-style extension: of N blank lines between top-level blocks, floor(N/2) become empty paragraphs
+  md.core.ruler.push('empty_paragraphs', (state) => {
+    const lines = state.src.split('\n');
+    const out = [];
+    for (const token of state.tokens) {
+      if (token.level === 0 && token.nesting !== -1 && token.map) {
+        let blank = 0;
+        let i = token.map[0] - 1;
+        while (i >= 0 && lines[i].trim() === '') { blank++; i--; }
+        if (i >= 0) {
+          for (let k = Math.floor(blank / 2); k > 0; k--) {
+            const spacer = new state.Token('html_block', '', 0);
+            spacer.block = true;
+            spacer.content = '<p class="md-empty-para"></p>\n';
+            out.push(spacer);
+          }
+        }
+      }
+      out.push(token);
+    }
+    state.tokens = out;
+  });
+
   md.inline.ruler.before('html_inline', 'img_tag', (state, silent) => {
     if (state.src.charCodeAt(state.pos) !== 0x3C) return false;
     const m = IMG_TAG_RE.exec(state.src.slice(state.pos));

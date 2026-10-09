@@ -69,6 +69,10 @@
   --list-indent: 22px; --task-box: 18px; --task-gap: 10px;
   --task-hang: calc(var(--task-box) + var(--task-gap));
   --quote-bar: 3px; --quote-pad: 16px;
+  --hr-w: 1px; --task-pad: 3px; --task-top: 3px;
+  /* UA bullet: ~ascent/3 wide, right edge ascent/3 + 7px before the text (ascent ~0.95em
+     for the system sans), bottom ~3px above the baseline */
+  --bullet-size: 0.33em; --bullet-gap: calc(0.32em + 7px); --bullet-lift: 0.2em;
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -530,6 +534,7 @@ main { flex: 1; overflow-y: auto; padding: 40px 32px 80px; }
 }
 .doc .h-collapsed .h-pill { display: inline-flex; }
 .doc p { margin-bottom: var(--p-mb); }
+.doc p.md-empty-para { min-height: 1lh; }
 /* height stays auto so an oversized image scales instead of stretching, while an
    explicit height="" on a sized <img> still wins */
 .doc img { max-width: 100%; }
@@ -599,11 +604,11 @@ main { flex: 1; overflow-y: auto; padding: 40px 32px 80px; }
 .doc table { display: block; overflow-x: auto; width: 100%; border-collapse: collapse; margin: var(--block-m) 0; font-size: 14px; }
 .doc th, .doc td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
 .doc th { background: var(--side); font-weight: 650; }
-.doc hr { border: none; border-top: 1px solid var(--line); margin: var(--hr-m) 0; }
+.doc hr { border: none; border-top: var(--hr-w) solid var(--line); margin: var(--hr-m) 0; }
 .doc ul, .doc ol { padding-left: var(--list-indent); margin-bottom: var(--p-mb); }
 
 .doc li.task-item {
-  list-style: none; margin-left: calc(-1 * var(--list-indent)); display: flex; gap: var(--task-gap); align-items: baseline; padding: 3px 0;
+  list-style: none; margin-left: calc(-1 * var(--list-indent)); display: flex; gap: var(--task-gap); align-items: baseline; padding: var(--task-pad) 0;
 }
 .cb {
   appearance: none; -webkit-appearance: none; margin: 0; cursor: pointer;
@@ -617,7 +622,7 @@ main { flex: 1; overflow-y: auto; padding: 40px 32px 80px; }
   margin: 2.5px auto auto;
   border: solid var(--on-accent); border-width: 0 1.25px 1.25px 0; transform: rotate(45deg);
 }
-.doc .cb { top: 3px; }
+.doc .cb { top: var(--task-top); }
 .doc li.done-t { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 
 .theme-btn {
