@@ -15,6 +15,7 @@ async function execFileAsync(cmd, args, opts) {
   return { stdout };
 }
 
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AMEND_WINDOW_MS = 60000;
 
 const SOURCES = {
@@ -426,8 +427,15 @@ function createHistory(gitExec = realGitExec, options = {}) {
       const last = await getLastCommit(gitDir, driveRoot, storeRelPath);
       // Amend only when this path owns HEAD; otherwise another file's commit would fold in.
       const head = last ? await run(gitDir, driveRoot, ['rev-parse', 'HEAD'], [128]) : null;
-      const amend = !!last && last.subject === subject && head?.code === 0 && head.stdout.trim() === last.rev
+      let amend = !!last && last.subject === subject && head?.code === 0 && head.stdout.trim() === last.rev
         && Date.now() - last.ts * 1000 < AMEND_WINDOW_MS;
+      if (amend) {
+        // An amend that returns the path to its parent's content is empty and git refuses it.
+        const parent = await run(gitDir, driveRoot, ['rev-parse', '--verify', '-q', 'HEAD~1'], [1]);
+        const base = parent.code === 0 ? 'HEAD~1' : EMPTY_TREE;
+        const netZero = await run(gitDir, driveRoot, ['diff', '--cached', '--quiet', base, '--', storeRelPath], [1]);
+        if (netZero.code === 0) amend = false;
+      }
       await run(gitDir, driveRoot, amend ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', subject]);
     }));
   }
