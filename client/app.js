@@ -1338,6 +1338,8 @@ function setPanelTab(tab) {
   if (tab !== 'history') tab = 'info';
   panelTabInfo.classList.toggle('on', tab === 'info');
   panelTabHistory.classList.toggle('on', tab === 'history');
+  panelTabInfo.setAttribute('aria-selected', String(tab === 'info'));
+  panelTabHistory.setAttribute('aria-selected', String(tab === 'history'));
   paneInfo.hidden = tab !== 'info';
   paneHistory.hidden = tab !== 'history';
   localStorage.setItem('showmd-panel-tab', tab);
