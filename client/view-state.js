@@ -64,8 +64,11 @@ export function createViewState({ panes, toolbar, sourceBtn, editBtn, readBtn, s
     for (const [name, el] of panes) el.hidden = pane !== name;
     toolbar.classList.toggle('show', pane === 'editor');
     sourceBtn.classList.toggle('on', view.mode === 'source');
+    sourceBtn.setAttribute('aria-pressed', String(view.mode === 'source'));
     editBtn.classList.toggle('on', view.mode === 'edit');
+    editBtn.setAttribute('aria-pressed', String(view.mode === 'edit'));
     readBtn.classList.toggle('on', view.mode === 'read');
+    readBtn.setAttribute('aria-pressed', String(view.mode === 'read'));
     settingsFooterBtn.classList.toggle('active', pane === 'settings');
     skillsFooterBtn.classList.toggle('active', view.source === 'skills');
     agentsFooterBtn.classList.toggle('active', view.source === 'agents');
