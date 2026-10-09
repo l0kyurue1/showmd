@@ -1482,6 +1482,7 @@ function positionTip(btn) {
 }
 document.querySelectorAll('.icon-btn, .theme-btn, .nav-footer-gear').forEach((btn) => {
   btn.addEventListener('mouseenter', () => positionTip(btn));
+  btn.addEventListener('focus', () => positionTip(btn));
 });
 
 fnameSymlink.addEventListener('click', () => {
