@@ -674,15 +674,21 @@ test('a file created and deleted within the amend window stays recoverable', { s
 });
 
 test('amend window: a net-zero change on the root commit starts a new commit', { skip: !git && 'git unavailable' }, async () => {
-  const root = realGitTmp('showmd-history-rootzero-');
-  const file = path.join(root, 'solo.md');
-  writeFileSync(file, '# only\n');
-  await record(root, 'solo.md', 'user');
-  rmSync(file);
-  await assert.doesNotReject(record(root, 'solo.md', 'user'));
+  await withFreshHistoryHome(async (history) => {
+    const root = realGitTmp('showmd-history-rootzero-');
+    const file = path.join(root, 'solo.md');
+    writeFileSync(file, '# only\n');
+    await history.record(root, 'solo.md', 'user');
+    const gitDir = historyDirFor(root);
+    const parent = spawnSync('git', ['--git-dir', gitDir, 'rev-parse', '--verify', '-q', 'HEAD~1']);
+    assert.notEqual(parent.status, 0, 'HEAD must be the root commit');
+    rmSync(file);
+    await assert.doesNotReject(history.record(root, 'solo.md', 'user'));
 
-  const entries = await timeline(root, 'solo.md');
-  assert.equal(entries.length, 2);
+    const entries = await history.timeline(root, 'solo.md');
+    assert.equal(entries.length, 2);
+    rmSync(root, { recursive: true, force: true });
+  });
 });
 
 async function withFreshHistoryHome(fn, extraEnv = {}) {
