@@ -909,6 +909,7 @@ const historyView = createHistoryView({
 
 function setSidebarCollapsed(collapsed) {
   sidebar.classList.toggle('collapsed', collapsed);
+  sidebar.inert = collapsed;
   sidebarBtn.classList.toggle('on', !collapsed);
   const sidebarLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
   sidebarTip.innerHTML = sidebarLabel + ` <kbd>${kbdLabel('⌘\\')}</kbd>`;
@@ -1213,6 +1214,7 @@ async function init() {
   // Hand CSS-only boot hiding to the animated JS launcher state before awaits.
   if (launcherBoot) {
     sidebar.classList.add('collapsed');
+    sidebar.inert = true;
     headerEl.hidden = true;
     appLogo.hidden = true;
     // Enter through View State so hideLauncher restores rootless boot chrome.

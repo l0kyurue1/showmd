@@ -1404,6 +1404,25 @@ test('ArrowDown in the sidebar selects the next row and opens it after the debou
   assert.equal(rawCalls().length, 1);
 });
 
+test('a collapsed sidebar is inert', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# A' },
+  });
+  const sidebar = h.document.getElementById('sidebar');
+  const btn = h.document.getElementById('sidebar-btn');
+  assert.equal(sidebar.contains(btn), false);
+  assert.ok(!sidebar.inert);
+  h.click(btn);
+  assert.equal(sidebar.classList.contains('collapsed'), true);
+  assert.equal(sidebar.inert, true);
+  h.keydown('k', { metaKey: true });
+  assert.equal(sidebar.classList.contains('collapsed'), false);
+  assert.equal(sidebar.inert, false);
+  assert.equal(h.document.activeElement, h.document.querySelector('#sidebar input'));
+});
+
 test('search filters the sidebar and Escape clears it', async () => {
   const h = await bootApp({
     root: { dir: '/tmp/proj', name: 'proj' },
@@ -1455,3 +1474,34 @@ test('while Settings is open the last opened file is marked last-visited in the 
   assert.equal(h.document.querySelector('#sidebar .on'), null);
   assert.deepEqual([...h.document.querySelectorAll('#sidebar .last-visited')].map((el) => el.dataset.navId), ['a.md']);
 });
+
+test('entering the launcher makes the collapsed sidebar inert and leaving restores it', async () => {
+  const h = await bootApp({
+    route: { space: 'root', rootKey: KEY, documentPath: 'a.md' },
+    roots: rootRoutes(),
+    tree: ['a.md'],
+    files: { 'a.md': '# A' },
+  });
+  const sidebar = h.document.getElementById('sidebar');
+  assert.ok(!sidebar.inert);
+
+  h.EventSource.instances[0].emit({ rootKey: KEY, path: null, event: 'root-removed' });
+  await h.waitFor(() => h.document.body.classList.contains('launcher'));
+  assert.equal(sidebar.classList.contains('collapsed'), true);
+  assert.equal(sidebar.inert, true);
+  assert.equal(h.window.localStorage.getItem('showmd-sidebar-collapsed') || '', '');
+
+  h.window.history.pushState({ idx: 1 }, '', `/r/${KEY}/a.md`);
+  h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 1 } }));
+  await h.waitFor(() => !h.document.body.classList.contains('launcher'));
+  assert.equal(sidebar.classList.contains('collapsed'), false);
+  assert.equal(sidebar.inert, false);
+});
+
+test('a rootless boot starts with the sidebar collapsed and inert', async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  const sidebar = h.document.getElementById('sidebar');
+  assert.equal(sidebar.classList.contains('collapsed'), true);
+  assert.equal(sidebar.inert, true);
+});
+
