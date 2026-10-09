@@ -86,6 +86,7 @@ const fnameTrack = fname.firstElementChild;
 const fnameSymlink = document.getElementById('fname-symlink');
 const revealBtn = document.getElementById('reveal-btn');
 const exportBtn = document.getElementById('export-btn');
+const saveChip = document.getElementById('save-chip');
 const saveChipDot = document.getElementById('save-chip-dot');
 const saveChipText = document.getElementById('save-chip-text');
 const saveChipTip = document.getElementById('save-chip-tip');
@@ -131,9 +132,14 @@ const tbRedo = document.getElementById('tb-redo');
 let cmEditor = null;
 
 function setSaveState(kind, text, title) {
-  saveChipDot.className = 'chip-dot ' + kind;
+  const dotClass = 'chip-dot ' + kind;
+  const tip = title || '';
+  if (saveChipDot.className === dotClass && saveChipText.textContent === text && saveChipTip.textContent === tip) return;
+  saveChipDot.className = dotClass;
   saveChipText.textContent = text;
-  saveChipTip.textContent = title || '';
+  saveChipTip.textContent = tip;
+  if (kind === 'saving') saveChip.setAttribute('aria-busy', 'true');
+  else saveChip.removeAttribute('aria-busy');
 }
 
 const save = createSaveFlow({
