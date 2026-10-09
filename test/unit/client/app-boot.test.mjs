@@ -1061,3 +1061,11 @@ test('a direct URL into an empty skills or agents catalog names the empty state 
   await agents.waitFor(() => agents.document.querySelector('.nav-body .nav-empty')?.textContent.startsWith('No agent config found'));
   assert.deepEqual(agents.errors, []);
 });
+
+test("Back at the start of the tab's stack does not call history.back", async () => {
+  const h = await bootApp({ root: { dir: null, name: null } });
+  let calls = 0;
+  h.window.history.back = () => { calls += 1; };
+  h.click(h.document.getElementById('back-btn'));
+  assert.equal(calls, 0);
+});
