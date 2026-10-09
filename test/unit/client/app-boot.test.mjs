@@ -1117,9 +1117,10 @@ test('panel tabs expose tab semantics', async () => {
   assert.deepEqual([info, history].map((t) => t.getAttribute('aria-selected')), ['true', 'false']);
 });
 
-test('icon buttons have clean labels and keyshortcuts', async () => {
+test('icon buttons have clean labels and keyshortcuts, except the mode buttons', async () => {
   const h = await bootApp({ root: { dir: null, name: null }, userAgent: MAC_UA });
   const KEY_NAMES = { '⌘': 'Meta', '⇧': 'Shift', '⌥': 'Alt', '⌃': 'Control' };
+  const MODE_BUTTONS = ['source-btn', 'edit-btn', 'read-btn'];
   const buttons = [...h.document.querySelectorAll('button')].filter((b) => b.querySelector('.tip'));
   assert.ok(buttons.length >= 20, 'expected the header, toolbar, theme and footer buttons');
   for (const btn of buttons) {
@@ -1130,7 +1131,9 @@ test('icon buttons have clean labels and keyshortcuts', async () => {
     const id = btn.id || btn.className;
     assert.equal(btn.getAttribute('aria-label'), clone.textContent.trim(), `${id}: aria-label`);
     assert.equal(tip.getAttribute('aria-hidden'), 'true', `${id}: tip aria-hidden`);
-    if (kbd) {
+    if (MODE_BUTTONS.includes(btn.id)) {
+      assert.equal(btn.hasAttribute('aria-keyshortcuts'), false, `${id}: Meta+E cycles modes, not this mode`);
+    } else if (kbd) {
       const chars = [...kbd.textContent.trim()];
       const key = chars.pop();
       const expected = [...chars.map((c) => KEY_NAMES[c]), key].join('+');
