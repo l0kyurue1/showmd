@@ -1211,7 +1211,7 @@ test('popstate failure is reported and does not wedge navigation', async () => {
     files: { 'a.md': '# A', 'docs/c.md': '# C' },
   });
   const logged = [];
-  const origError = h.window.console.error;
+  const origError = console.error;
   console.error = (...args) => logged.push(args);
   try {
     h.fetch.on('GET', (url) => url.pathname.endsWith('/tree'), () => { throw new Error('tree down'); });
