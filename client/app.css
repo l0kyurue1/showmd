@@ -483,7 +483,7 @@ header .icon-btn, header .chip { z-index: 21; }
   opacity: 0; pointer-events: none;
   transition: opacity .15s, transform .15s var(--spring);
 }
-.icon-btn:hover .tip, .theme-btn:hover .tip { opacity: 1; transform: translateX(calc(-50% + var(--shift))) translateY(0); transition-delay: .35s; }
+.icon-btn:hover .tip, .icon-btn:focus-visible .tip, .theme-btn:hover .tip, .theme-btn:focus-visible .tip { opacity: 1; transform: translateX(calc(-50% + var(--shift))) translateY(0); transition-delay: .35s; }
 .tip kbd {
   font-family: var(--sans); font-size: 10px; letter-spacing: 0.5px; background: var(--tooltip-kbd-bg);
   padding: 1.5px 5px; border-radius: 4px;
