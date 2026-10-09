@@ -15,7 +15,6 @@ async function execFileAsync(cmd, args, opts) {
   return { stdout };
 }
 
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AMEND_WINDOW_MS = 60000;
 
 const SOURCES = {
@@ -432,9 +431,10 @@ function createHistory(gitExec = realGitExec, options = {}) {
       if (amend) {
         // An amend that returns the path to its parent's content is empty and git refuses it.
         const parent = await run(gitDir, driveRoot, ['rev-parse', '--verify', '-q', 'HEAD~1'], [1]);
-        const base = parent.code === 0 ? 'HEAD~1' : EMPTY_TREE;
-        const netZero = await run(gitDir, driveRoot, ['diff', '--cached', '--quiet', base, '--', storeRelPath], [1]);
-        if (netZero.code === 0) amend = false;
+        const netZero = parent.code === 0
+          ? (await run(gitDir, driveRoot, ['diff', '--cached', '--quiet', 'HEAD~1', '--', storeRelPath], [1])).code === 0
+          : !(await run(gitDir, driveRoot, ['ls-files', '--cached', '-z', '--', storeRelPath])).stdout;
+        if (netZero) amend = false;
       }
       await run(gitDir, driveRoot, amend ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', subject]);
     }));
