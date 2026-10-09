@@ -5,8 +5,9 @@ import { adaptAgentTree, adaptFilesTree, adaptSkillsTree } from './navigation-ad
 import { MODE_CYCLE, createViewState, isSettingsOpen, isLauncherOpen, isSourceView, isVersionOpen } from './view-state.js';
 import { startMarquee, stopMarquee, reducedMotion } from './marquee.js';
 import { createHistoryView } from './history-view.js';
+import { createInfoPanel } from './info-panel.js';
 import { createDocView } from './doc-view.js';
-import { createSaveFlow, SAVE_DEBOUNCE_MS as INFO_REFRESH_MS } from './save-flow.js';
+import { createSaveFlow } from './save-flow.js';
 import { createTheme } from './theme.js';
 import { createPrintExport } from './print-export.js';
 import { createServerConnection } from './live-events.js';
@@ -167,166 +168,6 @@ function skillMetaHTML(meta) {
   return rows ? `<table class="skill-meta"><tbody>${rows}</tbody></table>` : '';
 }
 
-function makePropRow(key) {
-  const row = document.createElement('div');
-  row.className = 'prop-row';
-  const k = document.createElement('div');
-  k.className = 'prop-key';
-  k.textContent = key;
-  const v = document.createElement('div');
-  v.className = 'prop-val';
-  row.appendChild(k);
-  row.appendChild(v);
-  return { row, val: v };
-}
-
-function renderProperties(meta) {
-  props.innerHTML = '';
-  if (!meta || Object.keys(meta).length === 0) { props.hidden = true; propsHeader.hidden = true; return; }
-  props.hidden = false;
-  propsHeader.hidden = false;
-  for (const [key, value] of Object.entries(meta)) {
-    const { row, val } = makePropRow(key);
-    val.innerHTML = pipeline.renderPropValue(value);
-    props.appendChild(row);
-  }
-}
-
-function renderStats(text) {
-  const body = pipeline.parseFrontmatter(text).body;
-  const words = (body.match(/\S+/g) || []).length;
-  docStats.innerHTML =
-    `<div class="stat-row"><span>Words</span><span>${words}</span></div>` +
-    `<div class="stat-row"><span>Characters</span><span>${body.length}</span></div>`;
-}
-
-function jumpToHeading(item, idx) {
-  if (viewState.view.mode === 'read') {
-    const headings = [...doc.querySelectorAll('h1, h2, h3, h4, h5, h6')];
-    const target = headings[idx];
-    if (target) target.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
-  } else if (cmEditor) {
-    cmEditor.jumpToLine(item.line);
-  }
-}
-
-function renderOutline(outline) {
-  docOutline.innerHTML = '';
-  outlineHeader.hidden = !outline.length;
-  outline.forEach((item, idx) => {
-    const row = document.createElement('div');
-    row.className = 'outline-row';
-    row.textContent = item.text;
-    row.style.paddingLeft = (item.level - 1) * 24 + 8 + 'px';
-    row.addEventListener('click', () => jumpToHeading(item, idx));
-    docOutline.appendChild(row);
-  });
-}
-
-function refreshInfo(text) {
-  const raw = text !== undefined ? text : currentContent();
-  renderStats(raw);
-  renderOutline(pipeline.computeOutline(raw));
-  renderAgents();
-}
-
-let infoRefreshTimer = null;
-function scheduleInfoRefresh() {
-  clearTimeout(infoRefreshTimer);
-  infoRefreshTimer = setTimeout(() => {
-    if (!panelClosed()) refreshInfo();
-  }, INFO_REFRESH_MS);
-}
-
-function findSkillForFile(file) {
-  return file ? metadataForDocument(state.navigation, file, 'skill') : null;
-}
-
-function layoutClampedChips(wrap, chipEls, maxRows) {
-  wrap.replaceChildren(...chipEls);
-  if (!chipEls.length) return;
-  // Hidden chips report offsetTop 0; wait for a visible render to measure.
-  if (wrap.offsetParent === null) return;
-  if (new Set(chipEls.map((c) => c.offsetTop)).size <= maxRows) return;
-
-  const more = document.createElement('span');
-  more.className = 'badge chip badge-more';
-  more.textContent = '…';
-  more.title = 'Show all';
-  more.addEventListener('click', () => wrap.replaceChildren(...chipEls));
-
-  wrap.replaceChildren();
-  let shown = 0;
-  while (shown < chipEls.length) {
-    wrap.appendChild(chipEls[shown]);
-    wrap.appendChild(more);
-    const rows = new Set([...wrap.children].map((c) => c.offsetTop)).size;
-    wrap.removeChild(more);
-    if (rows > maxRows) { wrap.removeChild(chipEls[shown]); break; }
-    shown++;
-  }
-  wrap.appendChild(more);
-}
-
-function formatLockDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-}
-
-function addProp(label, value) {
-  if (!value) return;
-  const { row, val } = makePropRow(label);
-  val.textContent = value;
-  agentsBox.appendChild(row);
-}
-
-function renderAgents() {
-  const skill = findSkillForFile(state.file);
-  agentsHeader.hidden = agentsBox.hidden = !skill;
-  if (!skill) return;
-  agentsBox.innerHTML = '';
-
-  const { row: agentsRow, val: agentsVal } = makePropRow('Agents');
-  const chips = document.createElement('div');
-  chips.className = 'agent-chips';
-  agentsVal.appendChild(chips);
-  agentsBox.appendChild(agentsRow);
-  const chipEls = skill.badges.map((b) => {
-    const chip = document.createElement('span');
-    chip.className = 'badge chip';
-    chip.textContent = b;
-    return chip;
-  });
-  layoutClampedChips(chips, chipEls, 3);
-
-  if (skill.copies) {
-    const { row, val } = makePropRow('Copies');
-    val.innerHTML = skill.copyPaths.map((p) => `<div>${pipeline.escapeHtml(p)}</div>`).join('');
-    agentsBox.appendChild(row);
-  }
-  addProp('Origin', skill.origin);
-
-  if (skill.source) {
-    const { row, val } = makePropRow('Source');
-    if (skill.sourceUrl) {
-      const a = document.createElement('a');
-      a.href = skill.sourceUrl.replace(/\.git$/, '');
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.textContent = skill.source;
-      val.appendChild(a);
-    } else {
-      val.textContent = skill.source;
-    }
-    agentsBox.appendChild(row);
-  }
-
-  addProp('Install', skill.install);
-  addProp('Installed', formatLockDate(skill.installedAt));
-  addProp('Updated', formatLockDate(skill.updatedAt));
-}
-
 const CHEVRON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6l6 -6"/></svg>';
 const MAGNIFIER_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/><path d="M21 21l-6 -6"/></svg>';
 const FOLDER_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2"/></svg>';
@@ -345,8 +186,8 @@ const docView = createDocView({
   scroller: main,
   chevronSvg: CHEVRON_SVG,
   skillMetaHTML,
-  renderProperties,
-  refreshInfo,
+  renderProperties: (m) => infoPanel.renderProperties(m),
+  refreshInfo: (t) => infoPanel.refresh(t),
 });
 
 let editorModule = null;
@@ -364,7 +205,7 @@ async function setMode(mode) {
         if (!editorCreating) {
           editorCreating = ensureEditorModule().then(({ createEditor }) => createEditor(editorHost, {
             doc: currentContent(),
-            onChange: () => { save.schedule(); scheduleInfoRefresh(); },
+            onChange: () => { save.schedule(); infoPanel.scheduleRefresh(); },
             onSave: () => save.flush(),
             onToggleMode: () => setMode(MODE_CYCLE[viewState.view.mode]),
             blocks,
@@ -543,6 +384,18 @@ const viewState = createViewState({
   settingsFooterBtn, skillsFooterBtn, agentsFooterBtn,
 });
 
+const infoPanel = createInfoPanel({
+  panel, panelBtn,
+  tabInfo: panelTabInfo, tabHistory: panelTabHistory,
+  paneInfo, paneHistory, docStats, docOutline, outlineHeader,
+  agentsHeader, agentsBox, props, propsHeader,
+  doc, pipeline, viewState, storage: localStorage,
+  getContent: currentContent,
+  getEditor: () => cmEditor,
+  getSkill: () => (state.file ? metadataForDocument(state.navigation, state.file, 'skill') : null),
+  onOpen: () => historyView.load(),
+});
+
 // server-injected boot payload (settings/recents/root) — consumed once at
 // init so first paint needs no API round trips; later refreshes always fetch
 const bootDataEl = document.getElementById('boot-data');
@@ -562,7 +415,7 @@ const home = createHomeView({
   getRootInfo: () => rootInfo,
   getBackLabel: () => (currentRoute.rootKey && rootInfo && rootInfo.name ? rootInfo.name : 'Home'),
   getTreeLength: () => state.tree.length,
-  getPanelOpen: () => !panelClosed(), setPanel,
+  getPanelOpen: () => !infoPanel.isClosed(), setPanel: infoPanel.setOpen,
   openSkills, openAgentConfig, openSettings, fetchAgentTree,
   navigateTo,
 });
@@ -1300,7 +1153,7 @@ async function loadFile(file, preserveScroll) {
   if (cmEditor) cmEditor.setContent(text);
   renderSidebar();
   if (preserveScroll) main.scrollTop = scrollTop;
-  if (!panelClosed()) historyView.load();
+  if (!infoPanel.isClosed()) historyView.load();
 }
 
 // Supply History with the current root at call time, not panel-open time.
@@ -1357,26 +1210,6 @@ sidebarResize.addEventListener('dblclick', () => {
   localStorage.setItem('showmd-sidebar-width', SIDEBAR_DEFAULT);
 });
 
-const panelClosed = () => panel.hidden || panel.classList.contains('collapsed');
-
-function setPanel(open) {
-  panel.classList.toggle('collapsed', !open);
-  panelBtn.classList.toggle('on', open);
-  if (open) { historyView.load(); refreshInfo(); }
-}
-
-function setPanelTab(tab) {
-  if (tab !== 'history') tab = 'info';
-  panelTabInfo.classList.toggle('on', tab === 'info');
-  panelTabHistory.classList.toggle('on', tab === 'history');
-  panelTabInfo.setAttribute('aria-selected', String(tab === 'info'));
-  panelTabHistory.setAttribute('aria-selected', String(tab === 'history'));
-  paneInfo.hidden = tab !== 'info';
-  paneHistory.hidden = tab !== 'history';
-  localStorage.setItem('showmd-panel-tab', tab);
-  if (tab === 'info') refreshInfo();
-}
-
 async function handleServerEvent(data) {
   // events for a root this tab is not addressing belong to another tab's
   // Root Space — two tabs on two roots must not cross-refresh each other
@@ -1390,7 +1223,7 @@ async function handleServerEvent(data) {
   // anything else (new file, rename, delete) can
   if (event !== 'change' || path !== state.file) refreshTree();
   if (path !== state.file) return;
-  if (!panelClosed()) historyView.load();
+  if (!infoPanel.isClosed()) historyView.load();
   let res = null;
   try {
     res = await docs().raw(path);
@@ -1506,9 +1339,7 @@ exportBtn.addEventListener('click', () => printExport.exportPdf());
 sourceBtn.addEventListener('click', () => setMode('source'));
 editBtn.addEventListener('click', () => setMode('edit'));
 readBtn.addEventListener('click', () => setMode('read'));
-panelBtn.addEventListener('click', () => setPanel(panelClosed()));
-panelTabInfo.addEventListener('click', () => setPanelTab('info'));
-panelTabHistory.addEventListener('click', () => setPanelTab('history'));
+panelBtn.addEventListener('click', () => infoPanel.setOpen(infoPanel.isClosed()));
 
 function bindToolbarBtn(btn, action) {
   btn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1588,7 +1419,7 @@ document.addEventListener('keydown', (e) => {
   if (key === 'e') { e.preventDefault(); setMode(MODE_CYCLE[viewState.view.mode]); }
   else if (key === 's' && viewState.view.mode !== 'read') { e.preventDefault(); save.flush(); }
   // shifted backslash arrives as '|' on US layouts
-  else if ((key === '\\' || key === '|') && e.shiftKey) { e.preventDefault(); setPanel(panelClosed()); }
+  else if ((key === '\\' || key === '|') && e.shiftKey) { e.preventDefault(); infoPanel.setOpen(infoPanel.isClosed()); }
   else if (key === '\\') { e.preventDefault(); toggleSidebar(); }
 });
 
@@ -1678,7 +1509,7 @@ async function init() {
   setSidebarCollapsed(localStorage.getItem('showmd-sidebar-collapsed') === '1');
   const savedWidth = parseInt(localStorage.getItem('showmd-sidebar-width'), 10);
   if (savedWidth) setSidebarWidth(savedWidth);
-  setPanelTab(localStorage.getItem('showmd-panel-tab') || 'info');
+  infoPanel.setTab(localStorage.getItem('showmd-panel-tab') || 'info');
   const bootRoute = bootData.route || { space: 'home' };
   const bootSpace = bootRoute.space === 'skills' || bootRoute.space === 'agents';
   if (bootRoute.space === 'root') {
