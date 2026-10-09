@@ -12,10 +12,11 @@ House rules, not universal ones. A PR that breaks one should say why.
 - **Status, not interruption.** One persistent save chip carries most feedback. No `alert()`, no `confirm()`, effectively no toasts. Errors appear where the action was.
 - **Recoverable beats confirmable.** History is the safety net, so the app doesn't nag: typing never waits on the network, and restore needs no guard because it is just another revision. Only leaving the net — wiping history — earns a dialog.
 - **Focus is borrowed, not taken.** Clicking a control shouldn't move the caret; menus give focus back; a re-render shouldn't drop the focused node. One `:focus-visible` ring, copied onto everything.
-- **Emphasis is rationed.** Default hover is a flat tint. Scale transforms are for primary buttons only. Tooltips wait for hover intent.
+- **Emphasis is rationed.** Default hover is a flat tint. Scale transforms are for primary buttons only. Tooltips wait for hover intent or keyboard focus.
 
 Known gaps, so nobody copies the wrong pattern: border radii and chrome font sizes
-are untokenized literals.
+are untokenized literals; panel tabs have no arrow-key roving; focus tooltips are
+not Escape-dismissible (WCAG 1.4.13).
 
 ## The Variable Contract
 
