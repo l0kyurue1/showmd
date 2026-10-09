@@ -274,3 +274,17 @@ test('empty paragraphs: spacers leave data-line of real blocks unchanged', () =>
   assert.match(html, /<p data-line="8">last/);
   assert.equal((html.match(/data-line/g) || []).length, 3);
 });
+
+test('render: math source survives markdown escapes and emphasis', () => {
+  const p = pipeline();
+  assert.equal(p.render('$a \\, b$'), '<p data-line="0">$a \\, b$</p>\n');
+  assert.equal(p.render('$x_1 + y_1$ and _em_'), '<p data-line="0">$x_1 + y_1$ and <em>em</em></p>\n');
+  assert.equal(p.render('$\\{a\\}$'), '<p data-line="0">$\\{a\\}$</p>\n');
+  assert.equal(p.render('$$a \\\\ b$$'), '<p data-line="0">$$a \\\\ b$$</p>\n');
+});
+
+test('render: code spans and currency are not math', () => {
+  const p = pipeline();
+  assert.equal(p.render('`$x$`'), '<p data-line="0"><code>$x$</code></p>\n');
+  assert.equal(p.render('$3.50 and $4 \\, _x_'), '<p data-line="0">$3.50 and $4 , <em>x</em></p>\n');
+});
