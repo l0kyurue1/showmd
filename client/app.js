@@ -9,6 +9,7 @@ import { createDocView } from './doc-view.js';
 import { createSaveFlow, SAVE_DEBOUNCE_MS as INFO_REFRESH_MS } from './save-flow.js';
 import { createTheme } from './theme.js';
 import { createPrintExport } from './print-export.js';
+import { createServerConnection } from './live-events.js';
 import { FONT_PRESETS, createSettingsView } from './settings-view.js';
 import { followRestart } from './restart-follow.js';
 import { createHomeView, SKILLS_EMPTY_NOTICE, AGENTS_EMPTY_NOTICE } from './home-view.js';
@@ -1376,77 +1377,54 @@ function setPanelTab(tab) {
   if (tab === 'info') refreshInfo();
 }
 
-let serverGone = false;
+async function handleServerEvent(data) {
+  // events for a root this tab is not addressing belong to another tab's
+  // Root Space — two tabs on two roots must not cross-refresh each other
+  if (data.rootKey !== undefined && data.rootKey !== currentRoute.rootKey) return;
+  const { path, event } = data;
+  // A removed root hides panes but preserves any dirty editor buffer.
+  if (event === 'root-removed') { renderRootNotOpen(); return; }
+  // Root promotion changes addressing, not the document bytes.
+  if (event === 'root-promoted') { await applyRootPromotion(data); return; }
+  // content-only edits to the file already open can't reshape the tree;
+  // anything else (new file, rename, delete) can
+  if (event !== 'change' || path !== state.file) refreshTree();
+  if (path !== state.file) return;
+  if (!panelClosed()) historyView.load();
+  let res = null;
+  try {
+    res = await docs().raw(path);
+  } catch {
+    res = null;
+  }
+  const text = res && res.ok ? await res.text() : null;
+  const outcome = save.decideExternalUpdate({ ok: !!(res && res.ok), text, dirty: save.isDirty() });
+  if (outcome.action === 'error') {
+    setSaveState('error', 'Refresh failed', 'could not load the latest change — your open copy is unaffected');
+  } else if (outcome.action === 'adopt') {
+    save.adopt(outcome.text);
+    docView.renderDoc(outcome.text);
+    if (cmEditor) cmEditor.setContent(outcome.text);
+  } else if (outcome.action === 'stage') {
+    save.stageExternal(outcome.text);
+    banner.hidden = false;
+  }
+}
 
-function connectEvents() {
-  const es = new EventSource('/api/events');
-  es.onopen = () => {
-    if (!serverGone) return;
-    serverGone = false;
+const serverConnection = createServerConnection({
+  EventSource,
+  followRestart,
+  location: window.location,
+  report: setSaveState,
+  lostHint: bootData.root && bootData.root.launchedFrom === 'app'
+    ? 'ShowMD stopped — reopen the ShowMD app'
+    : 'showmd stopped — run showmd again in your terminal',
+  onReconnected: () => {
     save.setDirty(save.isDirty());
     refreshTree();
-  };
-  es.onerror = () => {
-    if (serverGone) return;
-    serverGone = true;
-    setSaveState('error', 'Connection lost', bootData.root && bootData.root.launchedFrom === 'app'
-      ? 'ShowMD stopped — reopen the ShowMD app'
-      : 'showmd stopped — run showmd again in your terminal');
-  };
-  es.onmessage = async (e) => {
-    const data = JSON.parse(e.data);
-    // broadcast before the process exits for a restart; carries no rootKey,
-    // so it is not caught by the per-root filter below and reaches every tab
-    if (data.event === 'server-restarting') {
-      setSaveState('saving', 'Restarting…', 'waiting for showmd to come back');
-      followRestart(data.port, {
-        pathname: window.location.pathname, search: window.location.search, hash: window.location.hash,
-      }).then((result) => {
-        if (!result.ok) {
-          setSaveState('error', 'Connection lost', bootData.root && bootData.root.launchedFrom === 'app'
-            ? 'ShowMD stopped — reopen the ShowMD app'
-            : 'showmd stopped — run showmd again in your terminal');
-        } else if (result.samePort) {
-          serverGone = false;
-          save.setDirty(save.isDirty());
-          refreshTree();
-        }
-      });
-      return;
-    }
-    // events for a root this tab is not addressing belong to another tab's
-    // Root Space — two tabs on two roots must not cross-refresh each other
-    if (data.rootKey !== undefined && data.rootKey !== currentRoute.rootKey) return;
-    const { path, event } = data;
-    // A removed root hides panes but preserves any dirty editor buffer.
-    if (event === 'root-removed') { renderRootNotOpen(); return; }
-    // Root promotion changes addressing, not the document bytes.
-    if (event === 'root-promoted') { await applyRootPromotion(data); return; }
-    // content-only edits to the file already open can't reshape the tree;
-    // anything else (new file, rename, delete) can
-    if (event !== 'change' || path !== state.file) refreshTree();
-    if (path !== state.file) return;
-    if (!panelClosed()) historyView.load();
-    let res = null;
-    try {
-      res = await docs().raw(path);
-    } catch {
-      res = null;
-    }
-    const text = res && res.ok ? await res.text() : null;
-    const outcome = save.decideExternalUpdate({ ok: !!(res && res.ok), text, dirty: save.isDirty() });
-    if (outcome.action === 'error') {
-      setSaveState('error', 'Refresh failed', 'could not load the latest change — your open copy is unaffected');
-    } else if (outcome.action === 'adopt') {
-      save.adopt(outcome.text);
-      docView.renderDoc(outcome.text);
-      if (cmEditor) cmEditor.setContent(outcome.text);
-    } else if (outcome.action === 'stage') {
-      save.stageExternal(outcome.text);
-      banner.hidden = false;
-    }
-  };
-}
+  },
+  onEvent: handleServerEvent,
+});
 
 bannerReload.addEventListener('click', () => {
   const text = save.resolveExternal('reload');
@@ -1743,7 +1721,7 @@ async function init() {
   if (bootRoute.space === 'settings') await enterSettingsView();
   updateNavButtons();
   historyView.probe();
-  connectEvents();
+  serverConnection.connect();
   window.addEventListener('popstate', (e) => {
     const targetIdx = (e.state && typeof e.state.idx === 'number') ? e.state.idx : 0;
     if (restoringPopstate) {
