@@ -50,6 +50,7 @@ export function createBlockRenderer({
 
   let mermaidTheme = null;
   let mermaidSeq = 0;
+  let mermaidCopies = 0;
   const mermaidCache = new Map();
   // keyed off the element, not a data-* attribute: a rendered diagram's source
   // must not be re-readable (or forgeable) as DOM text on the next theme refresh
@@ -96,9 +97,11 @@ export function createBlockRenderer({
     }
   }
 
+  const mermaidKey = (src) => mermaidTheme + '\n' + src.trimEnd();
+
   async function mermaidSVG(src) {
     const mermaid = await ensureMermaid();
-    const key = mermaidTheme + '\n' + src;
+    const key = mermaidKey(src);
     if (mermaidCache.has(key)) return mermaidCache.get(key);
     const { svg } = await mermaid.render('mmd-' + (mermaidSeq++), src);
     mermaidCache.set(key, svg);
@@ -106,6 +109,8 @@ export function createBlockRenderer({
   }
 
   function parseMermaidSVG(svg) {
+    const rootId = /^\s*<svg\b[^>]*?\sid="([^"]+)"/.exec(svg);
+    if (rootId) svg = svg.split(rootId[1]).join(rootId[1] + '-' + (mermaidCopies++));
     const parsed = new window.DOMParser().parseFromString(svg, 'image/svg+xml');
     const root = parsed.documentElement;
     if (root.localName !== 'svg'
@@ -167,6 +172,14 @@ export function createBlockRenderer({
       if (at < text.length) frag.appendChild(document.createTextNode(text.slice(at)));
       node.replaceWith(frag);
     }
+  }
+
+  function mermaidHeight(source, width) {
+    const svg = mermaidCache.get(mermaidKey(source));
+    const box = svg && /viewBox="[-\d.]+ [-\d.]+ ([\d.]+) ([\d.]+)"/.exec(svg);
+    if (!box || !(Number(box[1]) > 0)) return -1;
+    const cap = /max-width:\s*([\d.]+)px/.exec(svg);
+    return Math.min(width, cap ? Number(cap[1]) : width) * box[2] / box[1];
   }
 
   async function renderMermaidIn(rootEl) {
@@ -280,5 +293,5 @@ export function createBlockRenderer({
     }
   }
 
-  return { renderDocumentInto, renderBlockInto, refreshThemeIn };
+  return { renderDocumentInto, renderBlockInto, refreshThemeIn, mermaidHeight };
 }

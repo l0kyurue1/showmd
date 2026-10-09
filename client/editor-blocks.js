@@ -80,6 +80,16 @@ class HRWidget extends WidgetType {
   }
 }
 
+class SoftBreakWidget extends WidgetType {
+  eq() { return true; }
+  toDOM() {
+    const s = document.createElement('span');
+    s.textContent = ' ';
+    return s;
+  }
+  ignoreEvent() { return false; }
+}
+
 class MdBlockWidget extends WidgetType {
   constructor(src, gap) { super(); this.src = src; this.gap = gap; }
   eq(other) { return other.src === this.src && other.gap === this.gap; }
@@ -107,13 +117,18 @@ class MathWidget extends WidgetType {
   ignoreEvent() { return false; }
 }
 
+// .doc max-width (42rem at 16px); only seeds the height estimate of an unrendered diagram
+const DOC_WIDTH = 672;
+
 class MermaidWidget extends WidgetType {
-  constructor(src, gap, refresh) {
+  constructor(src, gap, refresh, blocks) {
     super();
     this.src = src;
     this.gap = gap;
     this.refresh = refresh;
+    this.blocks = blocks;
   }
+  get estimatedHeight() { return this.blocks.mermaidHeight ? this.blocks.mermaidHeight(this.src, DOC_WIDTH) : -1; }
   eq(other) { return other.src === this.src && other.refresh === this.refresh && other.gap === this.gap; }
   toDOM(view) {
     const blocks = view.state.facet(blocksFacet);
@@ -124,6 +139,13 @@ class MermaidWidget extends WidgetType {
     return div;
   }
   ignoreEvent() { return false; }
+}
+
+function topLevelParagraph(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (p.name === 'Blockquote' || p.name === 'ListItem') return false;
+  }
+  return true;
 }
 
 function selectionLines(state) {
@@ -277,8 +299,24 @@ function buildBlockDecos(state) {
   const replaceBlock = (from, to, widget) => {
     decos.push(Decoration.replace({ widget, block: true }).range(from, to));
   };
+  const joinedHeads = new Map();
+  const joinSoftBreaks = (node) => {
+    const hard = new Set();
+    tree.iterate({ from: node.from, to: node.to, enter: (n) => { if (n.name === 'HardBreak') hard.add(n.to - 1); } });
+    const last = doc.lineAt(node.to).number;
+    for (let n = doc.lineAt(node.from).number; n < last; n++) {
+      const line = doc.line(n);
+      if (hard.has(line.to)) continue;
+      decos.push(Decoration.replace({ widget: new SoftBreakWidget() }).range(line.to, line.to + 1));
+      joinedHeads.set(line.to + 1, joinedHeads.get(line.from) ?? line.from);
+    }
+  };
   tree.iterate({
     enter: (node) => {
+      if (node.name === 'Paragraph') {
+        if (node.from >= fmEnd && !onActiveLine(node.from, node.to) && topLevelParagraph(node.node)) joinSoftBreaks(node);
+        return false;
+      }
       if (node.name === 'FencedCode') {
         if (!onActiveLine(node.from, node.to) && doc.lineAt(node.from).from === node.from) {
           const infoNode = node.node.getChild('CodeInfo');
@@ -287,7 +325,7 @@ function buildBlockDecos(state) {
           if (lang === 'mermaid') {
             const codeText = node.node.getChild('CodeText');
             const src = codeText ? doc.sliceString(codeText.from, codeText.to) : '';
-            replaceBlock(node.from, to, new MermaidWidget(src, takeGap(node.from), refresh));
+            replaceBlock(node.from, to, new MermaidWidget(src, takeGap(node.from), refresh, blocks));
           } else {
             replaceBlock(node.from, to, new MdBlockWidget(doc.sliceString(node.from, to), takeGap(node.from)));
           }
@@ -309,7 +347,7 @@ function buildBlockDecos(state) {
     },
   });
   for (const entry of gaps.values()) {
-    decos.push(Decoration.line({ attributes: { style: `padding-bottom:${entry.gap}` } }).range(entry.line));
+    decos.push(Decoration.line({ attributes: { style: `padding-bottom:${entry.gap}` } }).range(joinedHeads.get(entry.line) ?? entry.line));
   }
   scanBlockMath(state, decos, onActiveLine);
   return Decoration.set(decos, true);
@@ -568,6 +606,9 @@ function buildEditDecos(view) {
           case 'SetextHeading2': {
             const level = Math.min(Number(node.name.slice(-1)), 4);
             decos.push(Decoration.line({ class: `cm-lp-h${level}` }).range(doc.lineAt(node.from).from));
+            if (node.name.startsWith('Setext') && !onActiveLine(node.from, node.to)) {
+              decos.push(Decoration.line({ class: 'cm-lp-setext-rule' }).range(doc.lineAt(node.to).from));
+            }
             break;
           }
           case 'HorizontalRule':

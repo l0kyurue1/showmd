@@ -160,6 +160,46 @@ test('renderBlockInto caches Mermaid output by theme and source', async () => {
   assert.equal(mermaid.initOpts.securityLevel, 'strict');
 });
 
+test('each inserted Mermaid copy gets its own element ids so url(#id) resolves inside it', async () => {
+  const flow = {
+    initialize() {},
+    render: async (id) => ({ svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}"><defs><marker id="${id}_pointEnd"></marker></defs><path marker-end="url(#${id}_pointEnd)"></path></svg>` }),
+  };
+  const fresh = createBlockRenderer({ markdown: () => '', load: async () => flow, reportError: () => {} });
+  const first = document.createElement('div');
+  const second = document.createElement('div');
+  document.body.append(first, second);
+  await fresh.renderBlockInto(first, { kind: 'mermaid', source: 'graph TD; A-->B' });
+  await fresh.renderBlockInto(second, { kind: 'mermaid', source: 'graph TD; A-->B\n' });
+  const ids = [...document.querySelectorAll('marker')].map((m) => m.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const host of [first, second]) {
+    const target = /url\(#([^)]+)\)/.exec(host.querySelector('path').getAttribute('marker-end'))[1];
+    assert.ok(host.querySelector('[id="' + target + '"]'));
+  }
+  first.remove();
+  second.remove();
+});
+
+test('mermaidHeight predicts the rendered height from the cached diagram', async () => {
+  const sized = (style) => ({
+    initialize() {},
+    render: async () => ({ svg: `<svg xmlns="http://www.w3.org/2000/svg" width="100%" ${style} viewBox="0 0 800 100"></svg>` }),
+  });
+  const make = (style) => createBlockRenderer({ markdown: () => '', load: async () => sized(style), reportError: () => {} });
+  const fresh = make('style="max-width: 800px;"');
+  assert.equal(fresh.mermaidHeight('graph TD', 400), -1);
+  await fresh.renderBlockInto(document.createElement('div'), { kind: 'mermaid', source: 'graph TD\n' });
+  assert.equal(fresh.mermaidHeight('graph TD', 400), 50);
+  assert.equal(fresh.mermaidHeight('graph TD', 1600), 100);
+  const uncapped = make('');
+  await uncapped.renderBlockInto(document.createElement('div'), { kind: 'mermaid', source: 'graph TD' });
+  assert.equal(uncapped.mermaidHeight('graph TD', 1600), 200);
+  const flat = createBlockRenderer({ markdown: () => '', load: async () => ({ initialize() {}, render: async () => ({ svg: '<svg viewBox="0 0 0 100"></svg>' }) }), reportError: () => {} });
+  await flat.renderBlockInto(document.createElement('div'), { kind: 'mermaid', source: 'graph TD' });
+  assert.equal(flat.mermaidHeight('graph TD', 400), -1);
+});
+
 test('each vendor loads at most once, and only when a block needs it', async () => {
   const fresh = renderer();
   const before = loaded.length;
