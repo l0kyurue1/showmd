@@ -29,8 +29,15 @@ function install(extra = {}) {
 
 test('applicationsDir: uses /Applications when writable, otherwise the user Applications directory', mac, () => {
   const home = path.join(workDir, 'home-appsdir');
-  const dir = applicationsDir(home);
-  assert.equal(dir === '/Applications' || dir === path.join(home, 'Applications'), true);
+  const saved = process.env.SHOWMD_APP_DIR;
+  delete process.env.SHOWMD_APP_DIR;
+  try {
+    const dir = applicationsDir(home);
+    assert.equal(['/Applications', path.join(home, 'Applications')].includes(dir), true);
+  } finally {
+    if (saved === undefined) delete process.env.SHOWMD_APP_DIR;
+    else process.env.SHOWMD_APP_DIR = saved;
+  }
 });
 
 test('installApp: builds a bundle Finder recognizes as ShowMD', mac, () => {
