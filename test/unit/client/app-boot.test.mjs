@@ -1264,3 +1264,194 @@ test('popstate failure is reported and does not wedge navigation', async () => {
   h.window.dispatchEvent(new h.window.PopStateEvent('popstate', { state: { idx: 2 } }));
   await h.waitFor(() => h.document.title === 'a.md');
 });
+
+test("Back then Forward walks the tab's own stack and updates the buttons", async () => {
+  const h = await bootApp({
+    route: { space: 'root', rootKey: KEY, documentPath: 'a.md' },
+    roots: rootRoutes(),
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '[[b]]', 'b.md': '# B' },
+  });
+  const back = h.document.getElementById('back-btn');
+  const fwd = h.document.getElementById('fwd-btn');
+  h.click(h.document.querySelector('a.wikilink'));
+  await h.waitFor(() => h.document.title === 'b.md');
+
+  h.click(back);
+  await h.waitFor(() => h.document.title === 'a.md');
+  assert.equal(back.getAttribute('aria-disabled'), 'true');
+  assert.equal(fwd.classList.contains('disabled'), false);
+  assert.equal(fwd.hasAttribute('aria-disabled'), false);
+
+  h.click(fwd);
+  await h.waitFor(() => h.document.title === 'b.md');
+  assert.equal(fwd.getAttribute('aria-disabled'), 'true');
+  assert.equal(back.hasAttribute('aria-disabled'), false);
+});
+
+test('printing from dark mode prints light, then restores dark and the title, without persisting light', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# Title\n\nbody' },
+    settings: { colorMode: 'dark' },
+  });
+  assert.equal(h.document.documentElement.dataset.theme, 'dark');
+  const wasTitle = h.document.title;
+  let themeAtPrint = null;
+  let titleAtPrint = null;
+  h.window.print = () => {
+    themeAtPrint = h.document.documentElement.dataset.theme;
+    titleAtPrint = h.document.title;
+    h.printCalls.push(true);
+  };
+
+  h.click(h.document.getElementById('export-btn'));
+  await h.waitFor(() => h.printCalls.length === 1);
+  assert.equal(themeAtPrint, 'light');
+  assert.equal(titleAtPrint, 'a');
+  assert.equal(h.document.documentElement.dataset.theme, 'dark');
+  assert.equal(h.document.title, wasTitle);
+  const lightWrites = h.fetch.calls.filter((c) => c.method === 'PUT' && c.pathname === '/api/settings'
+    && JSON.parse(c.init.body).colorMode === 'light');
+  assert.deepEqual(lightWrites, []);
+});
+
+test('a lost connection reports once and a reconnect refreshes the tree', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# A' },
+    deferredTimeouts: [800],
+  });
+  const text = h.document.getElementById('save-chip-text');
+  const es = h.EventSource.instances[0];
+
+  es.fail();
+  assert.equal(text.textContent, 'Connection lost');
+  assert.equal(h.document.getElementById('save-chip-dot').className.includes('error'), true);
+
+  h.keydown('e', { metaKey: true });
+  await h.waitFor(() => h.document.getElementById('editor-host').hidden === false);
+  h.document.getElementById('editor-host').fakeEditor._fireChange('# edited');
+  await h.waitFor(() => text.textContent !== 'Connection lost');
+  const afterEdit = text.textContent;
+  es.fail();
+  assert.equal(text.textContent, afterEdit, 'a second failure must not report again');
+
+  const treeCalls = () => h.fetch.calls.filter((c) => c.method === 'GET' && c.pathname === rootScopedPath('tree')).length;
+  const before = treeCalls();
+  es.open();
+  await h.waitFor(() => treeCalls() > before);
+  assert.notEqual(text.textContent, 'Connection lost');
+  assert.equal(h.document.getElementById('save-chip-dot').className.includes('error'), false);
+});
+
+test('opening the info panel shows the word count and the outline of the open document', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# One\n\nalpha beta gamma\n\n## Two\n' },
+  });
+  h.click(h.document.getElementById('panel-btn'));
+  await h.waitFor(() => h.document.querySelectorAll('#doc-outline .outline-row').length === 2);
+  const stats = h.document.getElementById('doc-stats').textContent;
+  assert.match(stats, /Words\s*7(?!\d)/);
+  assert.deepEqual(
+    [...h.document.querySelectorAll('#doc-outline .outline-row')].map((r) => r.textContent),
+    ['One', 'Two'],
+  );
+});
+
+test('an editor change refreshes the outline after the debounce', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md'],
+    files: { 'a.md': '# One\n' },
+    deferredTimeouts: [800],
+  });
+  h.click(h.document.getElementById('panel-btn'));
+  const rows = () => [...h.document.querySelectorAll('#doc-outline .outline-row')].map((r) => r.textContent);
+  await h.waitFor(() => rows().length === 1);
+
+  h.keydown('e', { metaKey: true });
+  await h.waitFor(() => h.document.getElementById('editor-host').hidden === false);
+  h.document.getElementById('editor-host').fakeEditor._fireChange('# One\n\n## Added\n');
+  assert.deepEqual(rows(), ['One']);
+
+  await h.runDeferredTimers(800);
+  assert.deepEqual(rows(), ['One', 'Added']);
+});
+
+test('ArrowDown in the sidebar selects the next row and opens it after the debounce', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+    deferredTimeouts: [120],
+  });
+  const rawCalls = () => h.fetch.calls.filter((c) => c.pathname === rootScopedPath('raw') && c.url.searchParams.get('path') === 'b.md');
+  assert.equal(h.document.title, 'a.md');
+
+  h.keydown('ArrowDown');
+  const marked = [...h.document.querySelectorAll('#sidebar .kbd-on')];
+  assert.deepEqual(marked.map((el) => el.dataset.navId), ['b.md']);
+  assert.equal(rawCalls().length, 0);
+  assert.equal(h.document.title, 'a.md');
+
+  await h.runDeferredTimers(120);
+  await h.waitFor(() => h.document.title === 'b.md');
+  assert.equal(rawCalls().length, 1);
+});
+
+test('search filters the sidebar and Escape clears it', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['alpha.md', 'beta.md'],
+    files: { 'alpha.md': '# A', 'beta.md': '# B' },
+  });
+  const ids = () => [...h.document.querySelectorAll('#sidebar li[data-nav-id]')].map((el) => el.dataset.navId);
+  assert.deepEqual(ids(), ['alpha.md', 'beta.md']);
+
+  const input = h.document.querySelector('#sidebar input');
+  input.value = 'bet';
+  input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  assert.deepEqual(ids(), ['beta.md']);
+
+  input.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(input.value, '');
+  assert.deepEqual(ids(), ['alpha.md', 'beta.md']);
+});
+
+test('clicking a directory header collapses its files', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'docs/c.md'],
+    files: { 'a.md': '# A', 'docs/c.md': '# C' },
+  });
+  const ids = () => [...h.document.querySelectorAll('#sidebar li[data-nav-id]')].map((el) => el.dataset.navId);
+  assert.deepEqual(ids(), ['a.md', 'docs/c.md']);
+
+  h.click(h.document.querySelector('#sidebar .sec.disclosure'));
+  assert.deepEqual(ids(), ['a.md']);
+  assert.equal(h.document.querySelector('#sidebar .sec.disclosure').classList.contains('collapsed'), true);
+
+  h.click(h.document.querySelector('#sidebar .sec.disclosure'));
+  assert.deepEqual(ids(), ['a.md', 'docs/c.md']);
+});
+
+test('while Settings is open the last opened file is marked last-visited in the sidebar', async () => {
+  const h = await bootApp({
+    root: { dir: '/tmp/proj', name: 'proj' },
+    tree: ['a.md', 'b.md'],
+    files: { 'a.md': '# A', 'b.md': '# B' },
+  });
+  const row = (id) => h.document.querySelector(`#sidebar li[data-nav-id="${id}"]`);
+  assert.equal(row('a.md').classList.contains('on'), true);
+  assert.equal(h.document.querySelector('#sidebar .last-visited'), null);
+
+  h.click(h.document.querySelector('#sidebar .nav-footer-gear'));
+  await h.waitFor(() => h.document.title === 'Settings');
+  assert.equal(h.document.querySelector('#sidebar .on'), null);
+  assert.deepEqual([...h.document.querySelectorAll('#sidebar .last-visited')].map((el) => el.dataset.navId), ['a.md']);
+});
