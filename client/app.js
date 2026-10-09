@@ -1135,9 +1135,16 @@ function renderSidebar() {
 
 function canGoBack() { return navIdx > 0; }
 
+function setAriaDisabled(btn, disabled) {
+  if (disabled) btn.setAttribute('aria-disabled', 'true');
+  else btn.removeAttribute('aria-disabled');
+}
+
 function updateNavButtons() {
   backBtn.classList.toggle('disabled', navIdx <= 0);
   fwdBtn.classList.toggle('disabled', navIdx >= navMax);
+  setAriaDisabled(backBtn, navIdx <= 0);
+  setAriaDisabled(fwdBtn, navIdx >= navMax);
 }
 
 // Apply parsed routes identically after pushState and popstate.
