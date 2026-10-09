@@ -102,5 +102,3 @@ test('a second invocation of the same target dedupes to the already-open root', 
     rmSync(home, { recursive: true, force: true });
   }
 });
-
-// Concurrent cold starts race the bind; the loser hands its target to the winner.
