@@ -77,6 +77,16 @@
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 * { margin: 0; box-sizing: border-box; }
 body {
   font-family: var(--sans); background: var(--bg); color: var(--ink);
@@ -399,7 +409,6 @@ nav .skill-file-row { font-size: 12px; color: var(--muted); }
 .update-cta-btn-secondary:hover { background: var(--selected); }
 .update-cta-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 .update-cta-btn:disabled { opacity: .6; cursor: default; }
-@media (prefers-reduced-motion: reduce) { .update-cta { transition: none; } }
 
 .col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 header {
@@ -917,7 +926,6 @@ body.launcher-boot #launcher-view[hidden] { display: flex; }
 .launcher-head { display: flex; justify-content: flex-start; padding: 0 10px; }
 .launcher-logo { display: flex; color: var(--logo); }
 .launcher-logo:hover .logo-m { animation: logo-jump .6s ease; }
-@media (prefers-reduced-motion: reduce) { .launcher-logo:hover .logo-m { animation: none; } }
 .launcher-section-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 300;
   color: var(--muted-faint);
