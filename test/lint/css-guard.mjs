@@ -93,6 +93,14 @@ for (const [, name, rawValue] of rootBlock.matchAll(/(--[\w-]+):\s*([^;]+);/g)) 
   }
 }
 
+const appCss = readFileSync(path.join(ROOT, 'client/app.css'), 'utf8');
+const reducedMotionRule = appCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\*,\s*\*::before,\s*\*::after\s*\{([^}]*)\}/);
+for (const prop of ['transition-duration', 'transition-delay', 'animation-duration', 'scroll-behavior']) {
+  if (!reducedMotionRule || !new RegExp(`(^|[\\s;])${prop}\\s*:`).test(reducedMotionRule[1])) {
+    failures.push(`client/app.css: the global reduced-motion block (*, *::before, *::after) does not set ${prop}`);
+  }
+}
+
 if (failures.length) {
   console.error('css-guard: the variable contract is not the only source of these values:');
   for (const f of failures) console.error('  ' + f);
