@@ -43,6 +43,7 @@ The shipped CLI (`bin/cli.js --help` is the source of truth):
   tools and applications), `test/e2e/` (spawns the real CLI: smoke, CLI flags,
   skills mode, agents mode), `test/lint/` (CSS, pack, process-seam, lane guards)
 - `CONTEXT.md` — architecture notes; `CONTRIBUTING.md` — dev setup and CSS rules
+- `docs/adr/` — architecture decision records
 
 ## Conventions
 
@@ -71,6 +72,6 @@ The shipped CLI (`bin/cli.js --help` is the source of truth):
   code and language behavior.
 - Exceptions are appropriate for historical regressions, security boundaries,
   concurrency, migrations, and data-loss risks that cannot be detected more
-  cheaply. See `docs/test-audit-2026-08-11.md` for examples and current verdicts.
+  cheaply.
 
 Run `npm test` before claiming any change done.

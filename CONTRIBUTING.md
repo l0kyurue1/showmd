@@ -82,8 +82,6 @@ would miss. Prefer the cheapest boundary that detects it. Do not duplicate
 centralized middleware per endpoint, re-test a pure classifier through a real
 platform install, assert private structure or mock calls without an observable
 outcome, rely on arbitrary sleeps, or retain tests for dead/pass-through code.
-The detailed audit and examples live in
-[`docs/test-audit-2026-08-11.md`](docs/test-audit-2026-08-11.md).
 
 ## Design and color changes
 
