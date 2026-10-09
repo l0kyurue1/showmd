@@ -1509,8 +1509,6 @@ bindToolbarBtn(tbQuote, () => cmEditor.toggleQuote());
 bindToolbarBtn(tbUndo, () => cmEditor.undo());
 bindToolbarBtn(tbRedo, () => cmEditor.redo());
 sidebarBtn.addEventListener('click', toggleSidebar);
-backBtn.addEventListener('click', () => history.back());
-fwdBtn.addEventListener('click', () => history.forward());
 diffBack.addEventListener('click', (e) => { e.preventDefault(); historyView.backToCurrent(); });
 restoreBtn.addEventListener('click', async () => {
   if (!isVersionOpen(viewState.view) || !state.file) return;
